@@ -13,6 +13,7 @@ import {
 	type MessagePlanUpdate,
 	type MessageHarnessEventUpdate,
 	type MessageNoticeUpdate,
+	type MessageReviewUpdate,
 	MessageUpdateType,
 	MessageUpdateStatus,
 	MessageToolUpdateType,
@@ -405,6 +406,9 @@ export const isMessageElicitationResolvedUpdate = (
 	update: MessageUpdate
 ): update is MessageElicitationResolvedUpdate =>
 	isMessageElicitationUpdate(update) && update.subtype === MessageElicitationUpdateType.Resolved;
+
+export const isMessageReviewUpdate = (update: MessageUpdate): update is MessageReviewUpdate =>
+	update.type === MessageUpdateType.Review;
 
 export const isMessagePlanUpdate = (update: MessageUpdate): update is MessagePlanUpdate =>
 	update.type === MessageUpdateType.Plan;

@@ -4,8 +4,10 @@ import { AbortRegistry } from "$lib/server/abortRegistry";
 import { createHash } from "node:crypto";
 import { App } from "@slack/bolt";
 import { z } from "zod";
+import type { ObjectId } from "mongodb";
 import { collections } from "$lib/server/database";
 import { config } from "$lib/server/config";
+import { base } from "$app/paths";
 import { onExit } from "$lib/server/exitHandler";
 import { logger } from "$lib/server/logger";
 import { ML_ASSISTANT_MODE } from "$lib/utils/mlAssistantFlag";
@@ -70,6 +72,9 @@ const mention = z.object({
 	bot_id: z.string().optional(),
 	subtype: z.string().optional(),
 });
+
+const conversationLink = (conversationId: ObjectId) =>
+	`${config.PUBLIC_ORIGIN}${base}/conversation/${conversationId.toString()}`;
 
 /** Transport and delivery only. ML Intern's existing engine owns tool execution and resume. */
 export class MlSlackBot {
@@ -311,6 +316,14 @@ export class MlSlackBot {
 				elicitationId: parsed.data.elicitationId,
 				status: "pending",
 			});
+			if (question?.pending?.kind === "review") {
+				await this.tell(
+					thread.channel,
+					body.user.id,
+					`Reviews are submitted on the web: ${conversationLink(thread.conversationId)}`
+				);
+				return;
+			}
 			if (!question || question.request.mode !== "form") {
 				await this.tell(
 					thread.channel,
@@ -726,7 +739,10 @@ export class MlSlackBot {
 			generationId: message.generationId,
 		});
 		let text: string;
-		if (question) {
+		// a review has no form here, the modal would submit an empty answer and resolve it
+		if (question?.pending?.kind === "review") {
+			text = `Review waiting, open it on the web: ${conversationLink(conv._id)}`;
+		} else if (question) {
 			const structured = question.pending?.kind === "ask" && !!question.request.fields?.length;
 			text = structured ? "" : question.request.message;
 			if (question.request.mode === "form") {
@@ -761,7 +777,9 @@ export class MlSlackBot {
 		);
 		const duration = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
 		const status = question
-			? "⏳ Waiting for your answer"
+			? question.pending?.kind === "review"
+				? "⏳ Waiting for your review"
+				: "⏳ Waiting for your answer"
 			: live.alive
 				? `${["🕐", "🕑", "🕒", "🕓", "🕔", "🕕", "🕖", "🕗", "🕘", "🕙", "🕚", "🕛"][Math.floor(elapsed / (this.statusIntervalMs / 1000)) % 12]} ${state.status === "waiting" ? "Running" : "Working"} for ${duration}`
 				: message.interrupted

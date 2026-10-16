@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
 	listMlServices: vi.fn(async (): Promise<unknown[]> => []),
 	listMlArtefacts: vi.fn(async (): Promise<unknown[]> => []),
 	listMlFiles: vi.fn(async (): Promise<unknown[]> => []),
+	listOpenReviews: vi.fn(async (): Promise<unknown[]> => []),
 	markServicesReported: vi.fn(async () => undefined),
 	pendingHarnessEvent: vi.fn<(conversationId: unknown, afterToolUuid: string) => Promise<unknown>>(
 		async () => undefined
@@ -144,6 +145,10 @@ vi.mock("$lib/server/mlRegistry/midTurn", () => ({
 vi.mock("$lib/server/mlFiles/store", async (importOriginal) => ({
 	...(await importOriginal<typeof import("$lib/server/mlFiles/store")>()),
 	listMlFiles: mocks.listMlFiles,
+}));
+vi.mock("$lib/server/mlReviews/store", async (importOriginal) => ({
+	...(await importOriginal<typeof import("$lib/server/mlReviews/store")>()),
+	listOpenReviews: mocks.listOpenReviews,
 }));
 
 const { runMcpFlow } = await import("./runMcpFlow");
@@ -289,7 +294,12 @@ beforeEach(() => {
 	mocks.mapping = { do_thing: { fnName: "do_thing", server: "hf", tool: "do_thing" } };
 	mocks.loadSessionJobLabels.mockClear();
 	mocks.getAbortTime.mockReturnValue(undefined);
-	for (const list of [mocks.listMlServices, mocks.listMlArtefacts, mocks.listMlFiles]) {
+	for (const list of [
+		mocks.listMlServices,
+		mocks.listMlArtefacts,
+		mocks.listMlFiles,
+		mocks.listOpenReviews,
+	]) {
 		list.mockReset();
 		list.mockResolvedValue([]);
 	}
@@ -738,6 +748,7 @@ describe("runMcpFlow offering the question tool", () => {
 		expect(result).toBe("completed");
 		expect(toolNames()).toEqual([
 			"ask_user_question",
+			"request_review",
 			"update_plan",
 			"wait",
 			"research",

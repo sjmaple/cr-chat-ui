@@ -9,6 +9,8 @@ import type {
 	ElicitationResolution,
 	ElicitationValue,
 } from "$lib/types/McpElicitation";
+import type { MlFileRef } from "$lib/types/MlFile";
+import type { ReviewVerdict } from "$lib/types/MlReview";
 
 export type MessageUpdate =
 	| MessageStatusUpdate
@@ -24,7 +26,8 @@ export type MessageUpdate =
 	| MessageBudgetUpdate
 	| MessageTurnStateUpdate
 	| MessageHarnessEventUpdate
-	| MessageNoticeUpdate;
+	| MessageNoticeUpdate
+	| MessageReviewUpdate;
 
 export enum MessageUpdateType {
 	Status = "status",
@@ -41,6 +44,7 @@ export enum MessageUpdateType {
 	TurnState = "turnState",
 	HarnessEvent = "harnessEvent",
 	Notice = "notice",
+	Review = "review",
 }
 
 /**
@@ -297,4 +301,35 @@ export interface MessageHarnessEventUpdate {
 export interface MessageNoticeUpdate {
 	type: MessageUpdateType.Notice;
 	text: string;
+}
+
+export enum MessageReviewUpdateType {
+	Request = "request",
+	Resolved = "resolved",
+}
+
+export type MessageReviewUpdate = MessageReviewRequestUpdate | MessageReviewResolvedUpdate;
+
+/** counts only, the records live in mlReviews and never in the conversation document */
+export interface MessageReviewRequestUpdate {
+	type: MessageUpdateType.Review;
+	subtype: MessageReviewUpdateType.Request;
+	reviewId: string;
+	toolUuid: string;
+	title: string;
+	records: number;
+	questions: number;
+	/** label when any question is required, a plain review otherwise */
+	mode: "review" | "label";
+}
+
+export interface MessageReviewResolvedUpdate {
+	type: MessageUpdateType.Review;
+	subtype: MessageReviewUpdateType.Resolved;
+	reviewId: string;
+	verdict: ReviewVerdict;
+	answered: number;
+	skipped: number;
+	comments: number;
+	files: MlFileRef[];
 }
