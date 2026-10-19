@@ -5,6 +5,7 @@ import { turnWaiting } from "$lib/server/generation/turnState";
 import { logger } from "$lib/server/logger";
 import { claimServiceEvents } from "$lib/server/mlRegistry/events";
 import type { ServiceEvent, ServicePush } from "$lib/types/MlService";
+import { waitParkRefusal } from "./parkRefusal";
 import type { BuiltinTool } from "./types";
 
 export const WAIT_TOOL_NAME = "wait";
@@ -80,8 +81,7 @@ export function createWaitTool({ serviceEvents }: { serviceEvents: boolean }): B
 			},
 		},
 		mayPark: true,
-		parkRefusalMessage:
-			"Only one call can park per round. Wait for one thing at a time, then check the rest when you wake.",
+		parkRefusalMessage: waitParkRefusal,
 		preprompt: serviceEvents
 			? `${WAITING_PREPROMPT} The harness watches every job and sandbox you launched and wakes you the ` +
 				`moment one ends or fails, so ask for a delay that matches the time the work has left rather ` +
