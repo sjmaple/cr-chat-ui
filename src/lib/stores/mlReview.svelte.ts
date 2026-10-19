@@ -85,6 +85,8 @@ export class ReviewSession {
 	view = $state<"list" | "focus" | undefined>(undefined);
 	focus = $state(0);
 	expanded = new SvelteSet<number>();
+	/** undefined until the user toggles it, the pane then opens it for a short review only */
+	instructionsOpen = $state<boolean | undefined>(undefined);
 
 	schema = $derived(this.payload?.schema);
 	records = $derived(this.payload?.records ?? []);

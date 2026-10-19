@@ -3,7 +3,7 @@
 	import { SvelteSet } from "svelte/reactivity";
 	import type { ReviewSession } from "$lib/stores/mlReview.svelte";
 	import type { ReviewComment, ReviewQuestion, ReviewQuote } from "$lib/types/MlReview";
-	import QuestionInput from "./fields/QuestionInput.svelte";
+	import ReviewQuestions from "./ReviewQuestions.svelte";
 	import ReviewFieldValue from "./fields/ReviewFieldValue.svelte";
 
 	import CarbonAddComment from "~icons/carbon/add-comment";
@@ -17,9 +17,18 @@
 		onactivequestion?: (name: string) => void;
 		/** bumped to open the record comment box, the C key */
 		composeNonce?: number;
+		/** the focus view shows the questions in its own dock, kept in view while the record scrolls */
+		dockQuestions?: boolean;
 	}
 
-	let { session, index, activeQuestion, onactivequestion, composeNonce = 0 }: Props = $props();
+	let {
+		session,
+		index,
+		activeQuestion,
+		onactivequestion,
+		composeNonce = 0,
+		dockQuestions = false,
+	}: Props = $props();
 
 	let schema = $derived(session.schema);
 	let record = $derived(session.records[index]);
@@ -42,13 +51,11 @@
 	let composer = $state<{ field?: string; quote?: ReviewQuote } | undefined>(undefined);
 	let composerText = $state("");
 	let composerEl: HTMLTextAreaElement | undefined = $state();
-	let selection = $state<{ field: string; quote: ReviewQuote } | undefined>(undefined);
 
 	async function openComposer(target: { field?: string; quote?: ReviewQuote }) {
 		if (!editable) return;
 		composer = target;
 		composerText = "";
-		selection = undefined;
 		await tick();
 		composerEl?.focus();
 	}
@@ -134,7 +141,7 @@
 			<textarea
 				bind:this={composerEl}
 				bind:value={composerText}
-				class="scrollbar-custom min-h-16 w-full resize-y rounded-md border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 outline-none focus:border-blue-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+				class="scrollbar-custom min-h-16 w-full resize-y scroll-mb-64 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 outline-none focus:border-blue-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
 				placeholder="Leave a comment"
 				aria-label="Comment"
 				maxlength={2000}
@@ -170,19 +177,6 @@
 	{/if}
 {/snippet}
 
-{#snippet questionInput(question: ReviewQuestion)}
-	<QuestionInput
-		{question}
-		value={draft?.answers[question.name]}
-		suggestion={record?.suggestions?.[question.name]}
-		mode={schema?.suggestions ?? "none"}
-		active={activeQuestion === question.name}
-		disabled={!editable}
-		onchange={(value) => session.setAnswer(index, question.name, value)}
-		onactivate={() => onactivequestion?.(question.name)}
-	/>
-{/snippet}
-
 {#if schema && record}
 	<div class="flex flex-col gap-3" data-record={index}>
 		{#each schema.fields as field (field.name)}
@@ -212,32 +206,33 @@
 					value={record.values[field.name]}
 					quotes={quotable ? anchorsFor(field.name) : undefined}
 					onanchors={(ids) => reportAnchors(field.name, ids)}
-					onselect={quotable && editable
-						? (quote) => (selection = quote ? { field: field.name, quote } : undefined)
+					oncomment={quotable && editable
+						? (quote) => openComposer({ field: field.name, quote })
 						: undefined}
 				/>
-				{#if selection?.field === field.name}
-					<button
-						type="button"
-						class="inline-flex w-fit items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-600 shadow-xs hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
-						onmousedown={(e) => e.preventDefault()}
-						onclick={() => selection && openComposer(selection)}
-					>
-						<CarbonAddComment class="text-xs" />
-						Comment on selection
-					</button>
+				{#if !dockQuestions}
+					<ReviewQuestions
+						{session}
+						{index}
+						questions={targeted.get(field.name) ?? []}
+						{activeQuestion}
+						{onactivequestion}
+					/>
 				{/if}
-				{#each targeted.get(field.name) ?? [] as question (question.name)}
-					{@render questionInput(question)}
-				{/each}
 				{@render commentList(fieldComments)}
 				{@render composerBox(field.name)}
 			</section>
 		{/each}
 
-		{#each recordQuestions as question (question.name)}
-			{@render questionInput(question)}
-		{/each}
+		{#if !dockQuestions}
+			<ReviewQuestions
+				{session}
+				{index}
+				questions={recordQuestions}
+				{activeQuestion}
+				{onactivequestion}
+			/>
+		{/if}
 
 		<div class="flex flex-col gap-1.5">
 			{@render commentList(comments.filter((comment) => comment.field === undefined))}

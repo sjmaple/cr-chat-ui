@@ -13,10 +13,10 @@
 		clamp?: boolean;
 		quotes?: AnchoredQuote[];
 		onanchors?: (lost: string[]) => void;
-		onselect?: (quote: ReviewQuote | undefined) => void;
+		oncomment?: (quote: ReviewQuote) => void;
 	}
 
-	let { field, value, clamp = false, quotes, onanchors, onselect }: Props = $props();
+	let { field, value, clamp = false, quotes, onanchors, oncomment }: Props = $props();
 </script>
 
 {#if value === undefined || value === null}
@@ -28,7 +28,7 @@
 		{clamp}
 		{quotes}
 		{onanchors}
-		{onselect}
+		{oncomment}
 	/>
 {:else if field.type === "code"}
 	<CodeField value={String(value)} language={field.language} {clamp} />

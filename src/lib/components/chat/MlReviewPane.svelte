@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tick } from "svelte";
+	import { tick, untrack } from "svelte";
 	import { page } from "$app/state";
 	import { mlReviews, type ReviewSession } from "$lib/stores/mlReview.svelte";
 	import { sidePane } from "$lib/stores/sidePane.svelte";
@@ -17,6 +17,7 @@
 	import MarkdownRenderer from "./MarkdownRenderer.svelte";
 	import SidePane from "./SidePane.svelte";
 	import ImageField from "../review/fields/ImageField.svelte";
+	import ReviewQuestions from "../review/ReviewQuestions.svelte";
 	import ReviewRecordView from "../review/ReviewRecordView.svelte";
 
 	import CarbonChevronLeft from "~icons/carbon/chevron-left";
@@ -47,6 +48,13 @@
 		["Esc", "Close this list"],
 	];
 
+	/** a review this short opens with its instructions showing, a longer one starts collapsed */
+	const SHORT_REVIEW = 20;
+	const DENSE_DOTS = 60;
+	const AUTO_ADVANCE_KEY = "mlReviewAutoAdvance";
+	/** long enough to see the pick land before the record changes */
+	const AUTO_ADVANCE_MS = 250;
+
 	const isDesktop = useIsDesktop();
 	const uid = $props.id();
 
@@ -68,11 +76,16 @@
 	let focus = $derived(Math.min(session?.focus ?? 0, Math.max(0, records.length - 1)));
 	let keyable = $derived((schema?.questions ?? []).filter((question) => question.type !== "text"));
 
+	let instructionsShown = $derived(session?.instructionsOpen ?? records.length <= SHORT_REVIEW);
+	let denseDots = $derived(records.length > DENSE_DOTS);
+	let bodyEl: HTMLElement | undefined = $state();
+	let autoAdvance = $state(readAutoAdvance());
+	let advanceTimer: ReturnType<typeof setTimeout> | undefined;
+
 	let chosenQuestion = $state<string | undefined>(undefined);
 	let composeNonce = $state(0);
 	let helpOpen = $state(false);
 	let drawer = $state<"blockers" | "comments" | "finish" | undefined>(undefined);
-	let instructionsOpen = $state(true);
 
 	let activeQuestion = $derived.by(() => {
 		if (chosenQuestion && keyable.some((question) => question.name === chosenQuestion)) {
@@ -110,8 +123,43 @@
 		if (session) session.view = next;
 	}
 
+	function readAutoAdvance(): boolean {
+		try {
+			return localStorage.getItem(AUTO_ADVANCE_KEY) === "true";
+		} catch {
+			return false;
+		}
+	}
+
+	function setAutoAdvance(on: boolean) {
+		autoAdvance = on;
+		try {
+			localStorage.setItem(AUTO_ADVANCE_KEY, String(on));
+		} catch {
+			// a blocked storage only loses the preference
+		}
+	}
+
+	/** a typed answer never moves on, only a pick that fills the last pickable question does */
+	function afterAnswer(question: ReviewQuestion) {
+		if (!autoAdvance || !session || question.type === "text" || keyable.length === 0) return;
+		const answers = session.draft(focus)?.answers ?? {};
+		if (!keyable.every((candidate) => isAnswered(answers[candidate.name]))) return;
+		const from = focus;
+		clearTimeout(advanceTimer);
+		advanceTimer = setTimeout(() => {
+			if (focus === from && view === "focus") move(1);
+		}, AUTO_ADVANCE_MS);
+	}
+
+	$effect(() => {
+		void focus;
+		if (view === "focus") untrack(() => bodyEl?.scrollTo({ top: 0 }));
+	});
+
 	function goTo(index: number, question?: string) {
 		if (!session) return;
+		clearTimeout(advanceTimer);
 		session.view = "focus";
 		session.focus = Math.max(0, Math.min(index, records.length - 1));
 		chosenQuestion = question;
@@ -152,6 +200,7 @@
 			question.name,
 			Array.isArray(next) && next.length === 0 ? undefined : next
 		);
+		afterAnswer(question);
 		if (question.type === "multi_label") return;
 		const answers = session.draft(focus)?.answers ?? {};
 		const at = keyable.findIndex((candidate) => candidate.name === question.name);
@@ -415,8 +464,10 @@
 						<button
 							type="button"
 							class="rounded-md px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
-							aria-expanded={instructionsOpen}
-							onclick={() => (instructionsOpen = !instructionsOpen)}
+							aria-expanded={instructionsShown}
+							onclick={() => {
+								if (session) session.instructionsOpen = !instructionsShown;
+							}}
 						>
 							Instructions
 						</button>
@@ -473,7 +524,7 @@
 					</p>
 				{/if}
 
-				{#if schema.instructions && instructionsOpen}
+				{#if schema.instructions && instructionsShown}
 					<div
 						class="prose scrollbar-custom max-h-40 max-w-none overflow-y-auto border-t border-gray-100 px-3 py-2 text-xs dark:border-gray-800 dark:prose-invert"
 					>
@@ -601,6 +652,7 @@
 		</header>
 
 		<div
+			bind:this={bodyEl}
 			class="relative scrollbar-custom min-h-0 flex-1 overflow-y-auto bg-white text-sm dark:bg-gray-900"
 		>
 			{#if !session || session.load === "loading"}
@@ -655,79 +707,125 @@
 					</ul>
 				{:else if records[focus]}
 					{@const record = records[focus]}
-					<div class="flex flex-col gap-3 px-3 py-3">
+					<div class="flex min-h-full flex-col">
 						<div
-							class="scrollbar-custom flex max-h-16 flex-wrap gap-1 overflow-y-auto p-0.5"
-							aria-label="Records"
-							role="group"
+							class="sticky top-0 z-10 flex flex-col gap-2 border-b border-gray-100 bg-white px-3 pt-3 pb-2 dark:border-gray-800 dark:bg-gray-900"
 						>
-							{#each records as each, index (index)}
-								{@const draft = session.draft(index)}
+							<div
+								class={[
+									"scrollbar-custom flex max-h-16 flex-wrap overflow-y-auto p-0.5",
+									denseDots ? "gap-[3px]" : "gap-1",
+								]}
+								aria-label="Records"
+								role="group"
+							>
+								{#each records as each, index (index)}
+									{@const draft = session.draft(index)}
+									<button
+										type="button"
+										class="{denseDots ? 'size-1.5' : 'size-2.5'} rounded-full {dotClass(
+											draft,
+											index === focus
+										)}"
+										aria-label="Record {index + 1}: {each.id}, {statusText(draft)}"
+										aria-current={index === focus ? "true" : undefined}
+										onclick={() => goTo(index)}
+									></button>
+								{/each}
+							</div>
+							<div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
 								<button
 									type="button"
-									class="size-2.5 rounded-full {dotClass(draft, index === focus)}"
-									aria-label="Record {index + 1}: {each.id}, {statusText(draft)}"
-									aria-current={index === focus ? "true" : undefined}
-									onclick={() => goTo(index)}
-								></button>
-							{/each}
-						</div>
-						<div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-							<button
-								type="button"
-								class="rounded-sm p-0.5 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-800"
-								aria-label="Previous record"
-								disabled={focus === 0}
-								onclick={() => move(-1)}
-							>
-								<CarbonChevronLeft />
-							</button>
-							<span class="tabular-nums" data-focus-position>
-								{focus + 1} / {records.length}
-							</span>
-							<span class="min-w-0 truncate font-mono text-gray-700 dark:text-gray-300">
-								{record.id}
-							</span>
-							<button
-								type="button"
-								class="rounded-sm p-0.5 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-800"
-								aria-label="Next record"
-								disabled={focus >= records.length - 1}
-								onclick={() => move(1)}
-							>
-								<CarbonChevronRight />
-							</button>
-							<span class="flex-1"></span>
-							<span class="inline-block first-letter:uppercase"
-								>{statusText(session.draft(focus))}</span
-							>
-							{#if session.editable}
-								<button
-									type="button"
-									class="rounded-md border border-gray-200 px-1.5 py-0.5 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800"
-									onclick={() => {
-										session?.skip(focus);
-										move(1);
-									}}
+									class="rounded-sm p-0.5 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-800"
+									aria-label="Previous record"
+									disabled={focus === 0}
+									onclick={() => move(-1)}
 								>
-									Skip
+									<CarbonChevronLeft />
 								</button>
-							{/if}
+								<span class="tabular-nums" data-focus-position>
+									{focus + 1} / {records.length}
+								</span>
+								<span class="min-w-0 truncate font-mono text-gray-700 dark:text-gray-300">
+									{record.id}
+								</span>
+								<button
+									type="button"
+									class="rounded-sm p-0.5 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-800"
+									aria-label="Next record"
+									disabled={focus >= records.length - 1}
+									onclick={() => move(1)}
+								>
+									<CarbonChevronRight />
+								</button>
+								<span class="flex-1"></span>
+								<span class="inline-block first-letter:uppercase"
+									>{statusText(session.draft(focus))}</span
+								>
+								{#if session.editable}
+									<button
+										type="button"
+										class="rounded-md border border-gray-200 px-1.5 py-0.5 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800"
+										onclick={() => {
+											session?.skip(focus);
+											move(1);
+										}}
+									>
+										Skip
+									</button>
+								{/if}
+							</div>
 						</div>
-						{#key focus}
-							<ReviewRecordView
-								{session}
-								index={focus}
-								{activeQuestion}
-								onactivequestion={(name) => (chosenQuestion = name)}
-								{composeNonce}
-							/>
-						{/key}
-						{#if session.editable}
-							<p class="text-[11px] text-gray-400 dark:text-gray-500">
-								1–9 pick · J/K next/previous · Enter next unanswered · C comment · A accept · S skip
-								· ? keys
-							</p>
+						<div class="flex-1 px-3 py-3">
+							{#key focus}
+								<ReviewRecordView
+									{session}
+									index={focus}
+									{activeQuestion}
+									onactivequestion={(name) => (chosenQuestion = name)}
+									{composeNonce}
+									dockQuestions
+								/>
+							{/key}
+						</div>
+						{#if schema.questions.length > 0 || session.editable}
+							<div
+								class="sticky bottom-0 z-10 flex flex-col gap-2 border-t border-gray-100 bg-white px-3 py-2 dark:border-gray-800 dark:bg-gray-900"
+								data-question-dock
+							>
+								{#if schema.questions.length > 0}
+									<div class="scrollbar-custom flex max-h-[40vh] flex-col gap-2 overflow-y-auto">
+										<ReviewQuestions
+											{session}
+											index={focus}
+											questions={schema.questions}
+											{activeQuestion}
+											onactivequestion={(name) => (chosenQuestion = name)}
+											onanswer={afterAnswer}
+											showTarget
+										/>
+									</div>
+								{/if}
+								{#if session.editable}
+									<div class="flex items-center gap-3 text-[11px] text-gray-400 dark:text-gray-500">
+										{#if keyable.length > 0}
+											<label class="flex flex-none cursor-pointer items-center gap-1">
+												<input
+													type="checkbox"
+													class="size-3"
+													checked={autoAdvance}
+													onchange={(e) => setAutoAdvance(e.currentTarget.checked)}
+												/>
+												Auto-advance
+											</label>
+										{/if}
+										<span class="min-w-0 truncate">
+											1–9 pick · J/K next/previous · Enter next unanswered · C comment · A accept ·
+											S skip · ? keys
+										</span>
+									</div>
+								{/if}
+							</div>
 						{/if}
 					</div>
 				{/if}

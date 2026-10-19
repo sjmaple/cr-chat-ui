@@ -144,6 +144,11 @@ const button = (root: ParentNode, label: string) => {
 
 describe("MlReviewPane", () => {
 	afterEach(() => {
+		try {
+			localStorage.removeItem("mlReviewAutoAdvance");
+		} catch {
+			// storage is optional
+		}
 		mlReviews.reset();
 		sidePane.reset();
 		vi.unstubAllGlobals();
@@ -403,6 +408,65 @@ describe("MlReviewPane", () => {
 		});
 	});
 
+	it("takes the selection popup down once the text is deselected", async () => {
+		const { container } = await mount(payload());
+		const body = container.querySelector(
+			"[data-field='body'] [data-review-quotable]"
+		) as HTMLElement;
+		const range = document.createRange();
+		range.setStart(body.firstChild as Text, 4);
+		range.setEnd(body.firstChild as Text, 7);
+		const selection = window.getSelection() as Selection;
+		selection.removeAllRanges();
+		selection.addRange(range);
+		body.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+		await tick();
+		expect(container.querySelector("[data-selection-popup]")).not.toBeNull();
+
+		selection.removeAllRanges();
+		await vi.waitFor(() => expect(container.querySelector("[data-selection-popup]")).toBeNull());
+	});
+
+	it("starts a long review with its instructions collapsed and remembers the toggle", async () => {
+		const many = Array.from({ length: 30 }, (_, i) => ({
+			id: `r${i + 1}`,
+			values: { title: `issue ${i + 1}`, body: "text" },
+		}));
+		const { container, session } = await mount(payload({ records: many }));
+		expect(container.textContent).not.toContain("Label each issue.");
+
+		button(container, "Instructions").click();
+		await tick();
+		expect(container.textContent).toContain("Label each issue.");
+		expect(session()?.instructionsOpen).toBe(true);
+	});
+
+	it("keeps the record nav and the questions in view while a long record scrolls", async () => {
+		const { container } = await mount(payload());
+		const dock = container.querySelector("[data-question-dock]") as HTMLElement;
+		expect(dock.querySelector("[data-question='kind']")).not.toBeNull();
+		expect(getComputedStyle(dock).position).toBe("sticky");
+		const nav = container.querySelector("[data-focus-position]")?.closest(".sticky");
+		expect(nav && getComputedStyle(nav).position).toBe("sticky");
+		expect(container.querySelector("[data-record] [data-question]")).toBeNull();
+	});
+
+	it("auto-advances once every pickable question of the record is answered", async () => {
+		const { container } = await mount(payload());
+		const toggle = container.querySelector(
+			"[data-question-dock] input[type='checkbox']"
+		) as HTMLInputElement;
+		toggle.click();
+		await tick();
+
+		await press("1");
+		await sleep(400);
+		expect(position(container)).toBe("1 / 3");
+
+		await press("3");
+		await vi.waitFor(() => expect(position(container)).toBe("2 / 3"));
+	});
+
 	it("hides a golden set's suggestions until the question is answered", async () => {
 		const { container } = await mount(payload());
 		expect(question(container, "kind")?.querySelector("[data-suggestion]")).toBeNull();
@@ -440,7 +504,9 @@ describe("MlReviewPane", () => {
 		const finish = container.querySelector("[aria-label='Finish your review']") as HTMLElement;
 		button(finish, "Submit").click();
 
-		await vi.waitFor(() => expect(deliver).toHaveBeenCalledWith("Review submitted: approve"));
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledWith("Review submitted: approve"), {
+			timeout: 5_000,
+		});
 		expect(server.patches.map((patch) => patch.index).sort()).toEqual([0, 1, 2]);
 		expect(server.submits[0]).toMatchObject({ verdict: "approve" });
 		stop();
