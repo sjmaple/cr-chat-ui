@@ -67,6 +67,7 @@ const payload = (overrides: Partial<ReviewPayload> = {}): ReviewPayload => ({
 interface Patch {
 	index: number;
 	draft: Pick<ReviewDraft, "status" | "answers" | "comments">;
+	baseRevision?: number;
 	keepalive?: boolean;
 }
 
@@ -76,6 +77,7 @@ function fakeServer(review: ReviewPayload) {
 	let gate: Promise<void> | undefined;
 	let release: (() => void) | undefined;
 	let submitAnswer: unknown = { ok: true, files: [] };
+	let conflict: ReviewDraft | undefined;
 	const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? "GET";
@@ -83,9 +85,18 @@ function fakeServer(review: ReviewPayload) {
 			return new Response(superjson.stringify(review));
 		}
 		if (method === "PATCH") {
-			patches.push({ ...JSON.parse(String(init?.body)), keepalive: init?.keepalive });
+			const patch: Patch = { ...JSON.parse(String(init?.body)), keepalive: init?.keepalive };
+			patches.push(patch);
 			if (gate) await gate;
-			return Response.json({ ok: true, problems: [] });
+			if (conflict) {
+				const draft = conflict;
+				conflict = undefined;
+				return new Response(
+					superjson.stringify({ message: "This record was changed elsewhere.", draft }),
+					{ status: 409 }
+				);
+			}
+			return Response.json({ ok: true, problems: [], revision: (patch.baseRevision ?? 0) + 1 });
 		}
 		if (method === "POST" && url.endsWith("/submit")) {
 			submits.push(JSON.parse(String(init?.body)));
@@ -106,6 +117,9 @@ function fakeServer(review: ReviewPayload) {
 		},
 		answerSubmit(body: unknown) {
 			submitAnswer = body;
+		},
+		conflictOnce(draft: ReviewDraft) {
+			conflict = draft;
 		},
 	};
 }
@@ -273,6 +287,50 @@ describe("MlReviewPane", () => {
 			keepalive: true,
 			draft: { answers: { kind: "question" } },
 		});
+	});
+
+	it("saves on top of the revision it last saw", async () => {
+		const at = new Date();
+		const { server } = await mount(
+			payload({
+				drafts: {
+					"0": { status: "pending", answers: {}, comments: [], updatedAt: at, revision: 4 },
+				},
+			})
+		);
+		await press("1");
+		await vi.waitFor(() => expect(server.patches).toHaveLength(1));
+		expect(server.patches[0].baseRevision).toBe(4);
+
+		await press("3");
+		await vi.waitFor(() => expect(server.patches).toHaveLength(2));
+		expect(server.patches[1].baseRevision).toBe(5);
+
+		await press("j");
+		await press("2");
+		await vi.waitFor(() => expect(server.patches).toHaveLength(3));
+		expect(server.patches[2]).toMatchObject({ index: 1, baseRevision: 0 });
+	});
+
+	it("keeps both edits when another tab saved the record first", async () => {
+		const at = new Date();
+		const { server, session } = await mount(payload());
+		server.conflictOnce({
+			status: "pending",
+			answers: { severity: 2 },
+			comments: [{ id: "c-other", body: "from the other tab", createdAt: at }],
+			updatedAt: at,
+			revision: 7,
+		});
+		await press("1");
+		await vi.waitFor(() => expect(server.patches).toHaveLength(2));
+		expect(server.patches[1]).toMatchObject({
+			baseRevision: 7,
+			draft: { status: "answered", answers: { kind: "bug", severity: 2 } },
+		});
+		expect(server.patches[1].draft.comments.map((comment) => comment.id)).toEqual(["c-other"]);
+		expect(session()?.draft(0)?.answers).toEqual({ kind: "bug", severity: 2 });
+		expect(session()?.saveErrors.size).toBe(0);
 	});
 
 	it("keeps one save in flight per record, and sends the newest draft after it", async () => {

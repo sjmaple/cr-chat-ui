@@ -50,11 +50,23 @@ export interface CommentInput {
 }
 
 const UNREACHABLE = "Could not reach the server. Try again.";
+/** saves that keep losing to another tab stop retrying and show the conflict */
+const MAX_CONFLICT_RETRIES = 3;
 
 const messageOf = (body: unknown, fallback: string): string =>
 	typeof body === "object" && body !== null && "message" in body && typeof body.message === "string"
 		? body.message
 		: fallback;
+
+/** the draft conflict answers in superjson, every other error in plain JSON */
+function parseBody(text: string): unknown {
+	try {
+		const raw = JSON.parse(text);
+		return raw && typeof raw === "object" && "json" in raw ? superjson.parse(text) : raw;
+	} catch {
+		return null;
+	}
+}
 
 const emptyDraft = (): ReviewDraft => ({
 	status: "pending",
@@ -117,6 +129,9 @@ export class ReviewSession {
 	#timers = new Map<number, ReturnType<typeof setTimeout>>();
 	#inflight = new Map<number, Promise<void>>();
 	#again = new Set<number>();
+	/** by record position, the server revision the local copy builds on, 0 before the first save */
+	#revisions = new Map<number, number>();
+	#conflicts = new Map<number, number>();
 	readonly #owner: MlReviewsStore;
 	readonly #epoch: number;
 
@@ -155,8 +170,12 @@ export class ReviewSession {
 			const payload = superjson.parse<ReviewPayload>(await res.text());
 			if (!this.#alive) return;
 			const drafts: Record<string, ReviewDraft> = { ...payload.drafts };
+			const dirty = new Set([...this.#timers.keys(), ...this.#inflight.keys()]);
+			for (const [key, draft] of Object.entries(payload.drafts)) {
+				if (!dirty.has(Number(key))) this.#revisions.set(Number(key), draft.revision ?? 0);
+			}
 			// an edit still waiting to be saved is newer than what the server holds
-			for (const index of [...this.#timers.keys(), ...this.#inflight.keys()]) {
+			for (const index of dirty) {
 				const local = this.drafts[String(index)];
 				if (local) drafts[String(index)] = local;
 			}
@@ -261,6 +280,7 @@ export class ReviewSession {
 				answers: $state.snapshot(draft.answers),
 				comments: $state.snapshot(draft.comments),
 			},
+			baseRevision: this.#revisions.get(index) ?? 0,
 		});
 		this.saving += 1;
 		try {
@@ -272,10 +292,17 @@ export class ReviewSession {
 			});
 			if (!this.#alive) return;
 			if (res.ok) {
+				const saved = await res.json().catch(() => null);
+				if (typeof saved?.revision === "number") this.#revisions.set(index, saved.revision);
+				this.#conflicts.delete(index);
 				this.saveErrors.delete(index);
 				return;
 			}
-			const parsed = await res.json().catch(() => null);
+			const parsed = parseBody(await res.text().catch(() => ""));
+			if (res.status === 409 && typeof parsed === "object" && parsed && "draft" in parsed) {
+				this.#adoptConflict(index, parsed.draft as ReviewDraft | undefined, parsed);
+				return;
+			}
 			this.saveErrors.set(index, messageOf(parsed, "This draft did not save."));
 			// submitted from another tab or expired, show what the server holds
 			if (res.status === 409) void this.refresh();
@@ -284,6 +311,38 @@ export class ReviewSession {
 		} finally {
 			this.saving -= 1;
 		}
+	}
+
+	/**
+	 * another tab saved this record first, both edits are kept, this tab winning a clash on the
+	 * same answer, then the merge is saved again on top of the other tab's revision
+	 */
+	#adoptConflict(index: number, theirs: ReviewDraft | undefined, body: unknown) {
+		const tries = (this.#conflicts.get(index) ?? 0) + 1;
+		this.#conflicts.set(index, tries);
+		if (tries > MAX_CONFLICT_RETRIES) {
+			this.saveErrors.set(index, messageOf(body, "This record keeps changing in another tab."));
+			return;
+		}
+		this.#revisions.set(index, theirs?.revision ?? 0);
+		const ours = this.draft(index);
+		if (theirs && ours && this.schema) {
+			const answers = { ...theirs.answers, ...ours.answers };
+			const known = new Set(theirs.comments.map((comment) => comment.id));
+			const settled = ours.status === "skipped" || ours.status === "discarded";
+			this.drafts[String(index)] = {
+				status: settled
+					? ours.status
+					: draftStatus(this.schema, answers, theirs.status, { answering: true }),
+				answers,
+				comments: [
+					...theirs.comments,
+					...ours.comments.filter((comment) => !known.has(comment.id)),
+				],
+				updatedAt: new Date(),
+			};
+		}
+		this.#again.add(index);
 	}
 
 	async submit(verdict: ReviewVerdict): Promise<boolean> {
