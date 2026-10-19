@@ -31,6 +31,7 @@
 	import ArtifactCard from "./ArtifactCard.svelte";
 	import ElicitationForm from "./ElicitationForm.svelte";
 	import PlanCard from "./PlanCard.svelte";
+	import MlReviewCard from "./MlReviewCard.svelte";
 	import HarnessEventChip from "./HarnessEventChip.svelte";
 	import { isMessageToolResultUpdate, isMessageToolErrorUpdate } from "$lib/utils/messageUpdates";
 	import type { MessageHarnessEventUpdate, MessagePlanUpdate } from "$lib/types/MessageUpdate";
@@ -42,6 +43,7 @@
 		messageBlocks,
 		THINK_BLOCK_REGEX,
 		type ElicitationBlock,
+		type ReviewBlock,
 		type MessageBlock,
 	} from "$lib/utils/messageBlocks";
 	import { rebuildLegacyContent } from "$lib/utils/messageShape";
@@ -160,6 +162,7 @@
 		| { kind: "artifact"; op: ArtifactOperation; opIndex: number }
 		| ({ kind: "elicitation" } & Omit<ElicitationBlock, "type">)
 		| { kind: "plan"; update: MessagePlanUpdate }
+		| ({ kind: "review" } & Omit<ReviewBlock, "type">)
 		| { kind: "harnessEvent"; update: MessageHarnessEventUpdate }
 		| { kind: "notice"; text: string };
 
@@ -208,6 +211,10 @@
 				// Never folded into the collapsible summary: the plan stays visible.
 				flush();
 				units.push({ kind: "plan", update: block.update });
+			} else if (block.type === "review") {
+				// never folded into the summary, the review waits on the user
+				flush();
+				units.push({ kind: "review", request: block.request, resolved: block.resolved });
 			} else if (block.type === "harnessEvent") {
 				flush();
 				units.push({ kind: "harnessEvent", update: block.update });
@@ -248,7 +255,8 @@
 				block.type === "think" ||
 				block.type === "tool" ||
 				block.type === "elicitation" ||
-				block.type === "plan"
+				block.type === "plan" ||
+				block.type === "review"
 		);
 	});
 
@@ -369,6 +377,13 @@
 							<div data-exclude-from-copy>
 								<PlanCard update={block.update} />
 							</div>
+						{:else if block.type === "review"}
+							<MlReviewCard
+								request={block.request}
+								resolved={block.resolved}
+								conversationId={page.params.id ?? ""}
+								interactive={isAuthor}
+							/>
 						{:else if block.type === "harnessEvent"}
 							<div data-exclude-from-copy class={processBlockClasses}>
 								<HarnessEventChip update={block.update} />
@@ -420,6 +435,13 @@
 							<div data-exclude-from-copy>
 								<PlanCard update={unit.update} />
 							</div>
+						{:else if unit.kind === "review"}
+							<MlReviewCard
+								request={unit.request}
+								resolved={unit.resolved}
+								conversationId={page.params.id ?? ""}
+								interactive={isAuthor}
+							/>
 						{:else if unit.kind === "harnessEvent"}
 							<div data-exclude-from-copy class={processBlockClasses}>
 								<HarnessEventChip update={unit.update} />

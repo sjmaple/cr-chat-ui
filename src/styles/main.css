@@ -310,3 +310,8 @@ body {
 		background-position: -200% 0;
 	}
 }
+
+/* review comments anchored on a quote, set by quoteAnchors */
+::highlight(review-quote) {
+	background-color: rgb(250 204 21 / 0.35);
+}
