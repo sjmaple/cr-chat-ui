@@ -22,6 +22,7 @@
 	import StartStep from "../review/StartStep.svelte";
 	import TableView from "../review/TableView.svelte";
 	import { takeSelectionComment } from "../review/quoteAnchors";
+	import { mediaKeys } from "../review/mediaKeys";
 
 	import CarbonCheckmark from "~icons/carbon/checkmark";
 	import CarbonCheckmarkFilled from "~icons/carbon/checkmark-filled";
@@ -57,6 +58,12 @@
 		["Go to record", "G"],
 		["Accept the model's answer", "A"],
 	];
+	const PLAYER_KEYS: [string, string][] = [
+		["Play / pause", "Space"],
+		["Back / forward 5 s", "← →"],
+	];
+	const FRAME_KEYS: [string, string][] = [["Previous / next frame", ", ."]];
+	const AREA_KEYS: [string, string][] = [["Mark an area", "M"]];
 	/** a short review shows its instructions as a strip, a long one keeps them in the title */
 	const SHORT_REVIEW = 20;
 	/** wide enough for a question column and comment margins beside the record */
@@ -107,6 +114,15 @@
 	let focus = $derived(Math.min(session?.focus ?? 0, Math.max(0, records.length - 1)));
 	let keyable = $derived((schema?.questions ?? []).filter((question) => question.type !== "text"));
 	let questions = $derived(schema?.questions ?? []);
+	let keyList = $derived.by(() => {
+		const types = new Set(schema?.fields.map((field) => field.type));
+		return [
+			...KEYS,
+			...(types.has("audio") || types.has("video") ? PLAYER_KEYS : []),
+			...(types.has("video") ? FRAME_KEYS : []),
+			...(types.has("image") || types.has("video") ? AREA_KEYS : []),
+		];
+	});
 	let check = $derived(schema ? passFailQuestion(schema) : undefined);
 
 	let chosenQuestion = $state<string | undefined>(undefined);
@@ -290,7 +306,22 @@
 			return;
 		const key = e.key.toLowerCase();
 		const question = questions.find((candidate) => candidate.name === activeQuestion);
-		if (/^[1-9]$/.test(e.key)) {
+		const media = mediaKeys();
+		const onControl =
+			e.target instanceof Element && !!e.target.closest("button, a, [role='slider']");
+		if (e.key === " " && media?.toggle && !onControl) {
+			e.preventDefault();
+			media.toggle();
+		} else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && media?.seek) {
+			e.preventDefault();
+			media.seek(e.key === "ArrowLeft" ? -1 : 1);
+		} else if ((e.key === "," || e.key === ".") && media?.step) {
+			e.preventDefault();
+			media.step(e.key === "," ? -1 : 1);
+		} else if (key === "m" && media?.mark && session.editable) {
+			e.preventDefault();
+			media.mark();
+		} else if (/^[1-9]$/.test(e.key)) {
 			if (!question || question.type === "text" || !session.editable) return;
 			e.preventDefault();
 			answerByKey(question, Number(e.key));
@@ -312,6 +343,7 @@
 			e.preventDefault();
 			const selection = takeSelectionComment();
 			if (selection) selection();
+			else if (media?.comment) media.comment();
 			else composeNonce += 1;
 		} else if (key === "a") {
 			if (!question || !session.editable) return;
@@ -581,7 +613,7 @@
 						class="scrollbar-custom min-h-0 flex-1 overflow-y-auto px-4 py-5"
 					>
 						{#key focus}
-							<RecordBody {session} index={focus} {composeNonce} />
+							<RecordBody {session} index={focus} {composeNonce} mediaKeys />
 						{/key}
 					</main>
 					{#if questions.length > 0}
@@ -739,7 +771,7 @@
 							>
 								<div class={wide ? "" : "max-w-[620px]"}>
 									{#key focus}
-										<RecordBody {session} index={focus} {wide} {composeNonce} />
+										<RecordBody {session} index={focus} {wide} {composeNonce} mediaKeys />
 									{/key}
 								</div>
 							</main>
@@ -802,7 +834,7 @@
 						role="dialog"
 						aria-label="Keyboard shortcuts"
 					>
-						{#each KEYS as [label, keys] (label)}
+						{#each keyList as [label, keys] (label)}
 							<div class="flex items-center justify-between gap-3 text-gray-700 dark:text-gray-300">
 								<span>{label}</span>
 								<span class="flex gap-1">

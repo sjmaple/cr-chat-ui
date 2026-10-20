@@ -4,9 +4,11 @@ import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import type { MlFileRef } from "$lib/types/MlFile";
 import type {
 	ReviewAnswer,
+	ReviewArea,
 	ReviewComment,
 	ReviewDraft,
 	ReviewQuote,
+	ReviewTime,
 	ReviewRecord,
 	ReviewSchema,
 	ReviewStatus,
@@ -55,6 +57,8 @@ export interface ReviewCounts {
 export interface CommentInput {
 	field?: string;
 	quote?: ReviewQuote;
+	area?: ReviewArea;
+	time?: ReviewTime;
 	body: string;
 }
 
@@ -231,6 +235,8 @@ export class ReviewSession {
 			id: globalThis.crypto.randomUUID(),
 			...(input.field !== undefined ? { field: input.field } : {}),
 			...(input.quote ? { quote: input.quote } : {}),
+			...(input.area ? { area: input.area } : {}),
+			...(input.time ? { time: input.time } : {}),
 			body: input.body.trim(),
 			createdAt: new Date(),
 		};

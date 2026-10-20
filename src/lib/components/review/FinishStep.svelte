@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ReviewSession } from "$lib/stores/mlReview.svelte";
 	import type { ReviewVerdict } from "$lib/types/MlReview";
+	import { anchorLabel } from "$lib/utils/review/anchors";
 	import { headingField, plainText } from "$lib/utils/review/progress";
 
 	import CarbonWarning from "~icons/carbon/warning-alt";
@@ -225,6 +226,8 @@
 								<span class="text-xs text-gray-500 dark:text-gray-400">
 									{#if comment.quote}
 										on “{comment.quote.exact}”
+									{:else if anchorLabel(comment)}
+										on {fieldTitle(comment.field)} at {anchorLabel(comment)}
 									{:else if comment.field}
 										on {fieldTitle(comment.field)}
 									{:else}

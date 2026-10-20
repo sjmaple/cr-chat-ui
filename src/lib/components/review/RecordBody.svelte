@@ -2,10 +2,19 @@
 	import { tick, untrack } from "svelte";
 	import { SvelteSet } from "svelte/reactivity";
 	import type { ReviewSession } from "$lib/stores/mlReview.svelte";
-	import type { ReviewComment, ReviewField, ReviewQuote } from "$lib/types/MlReview";
+	import type {
+		ReviewArea,
+		ReviewComment,
+		ReviewField,
+		ReviewQuote,
+		ReviewTime,
+	} from "$lib/types/MlReview";
+	import { anchorLabel, isMediaField } from "$lib/utils/review/anchors";
 	import { headingField, leadImageField, shownFields } from "$lib/utils/review/progress";
+	import AnchoredNotes from "./AnchoredNotes.svelte";
 	import ReviewFieldValue from "./fields/ReviewFieldValue.svelte";
 	import ImageStage from "./ImageStage.svelte";
+	import MediaStage from "./MediaStage.svelte";
 
 	import CarbonChat from "~icons/carbon/chat";
 	import CarbonTrashCan from "~icons/carbon/trash-can";
@@ -19,9 +28,18 @@
 		composeNonce?: number;
 		/** a list row already shows the heading in its own header */
 		hideHeading?: boolean;
+		/** the record's lead image or player takes the pane's media keys */
+		mediaKeys?: boolean;
 	}
 
-	let { session, index, wide = false, composeNonce = 0, hideHeading = false }: Props = $props();
+	let {
+		session,
+		index,
+		wide = false,
+		composeNonce = 0,
+		hideHeading = false,
+		mediaKeys = false,
+	}: Props = $props();
 
 	let schema = $derived(session.schema);
 	let record = $derived(session.records[index]);
@@ -38,6 +56,7 @@
 		fields.filter((field) => field.type === "number" || field.type === "category")
 	);
 	let body = $derived(fields.filter((field) => !meta.includes(field)));
+	let leadPlayer = $derived(image ? undefined : body.find(isMediaField));
 	/** on the record, or on a field shown in the heading or meta line */
 	let recordComments = $derived(
 		comments.filter(
@@ -48,11 +67,18 @@
 
 	const lost = new SvelteSet<string>();
 
-	let composer = $state<{ field?: string; quote?: ReviewQuote } | undefined>(undefined);
+	interface ComposerTarget {
+		field?: string;
+		quote?: ReviewQuote;
+		area?: ReviewArea;
+		time?: ReviewTime;
+	}
+
+	let composer = $state<ComposerTarget | undefined>(undefined);
 	let composerText = $state("");
 	let composerEl: HTMLTextAreaElement | undefined = $state();
 
-	async function openComposer(target: { field?: string; quote?: ReviewQuote }) {
+	async function openComposer(target: ComposerTarget) {
 		if (!editable) return;
 		composer = target;
 		composerText = "";
@@ -165,6 +191,10 @@
 				<p class="truncate text-xs text-gray-500 italic dark:text-gray-400">
 					“{composer.quote.exact}”
 				</p>
+			{:else if anchorLabel(composer)}
+				<p class="font-mono text-xs text-gray-500 dark:text-gray-400" data-composer-anchor>
+					at {anchorLabel(composer)}
+				</p>
 			{/if}
 			<textarea
 				bind:this={composerEl}
@@ -237,11 +267,24 @@
 {#if schema && record}
 	<div class="flex flex-col gap-6" data-record={index}>
 		{#if image}
-			<div class="-mx-8 -mt-7 flex flex-col gap-3" data-field={image.name}>
-				<ImageStage value={record.values[image.name]} />
-				{#each comments.filter((comment) => comment.field === image.name) as comment (comment.id)}
-					<div class="px-8">{@render note(comment)}</div>
-				{/each}
+			{@const imageName = image.name}
+			{@const imageComments = comments.filter((comment) => comment.field === imageName)}
+			<div class="-mx-8 -mt-7 flex flex-col gap-3" data-field={imageName}>
+				<ImageStage
+					value={record.values[imageName]}
+					comments={imageComments}
+					pending={composer?.field === imageName ? composer.area : undefined}
+					keys={mediaKeys}
+					onmark={editable ? (area) => openComposer({ field: imageName, area }) : undefined}
+				/>
+				<div class="flex flex-col gap-2 px-8">
+					<AnchoredNotes
+						comments={imageComments}
+						{editable}
+						onremove={(id) => session.removeComment(index, id)}
+					/>
+					{@render composerBox(imageName)}
+				</div>
 			</div>
 		{/if}
 
@@ -274,7 +317,22 @@
 
 		{#each body as field (field.name)}
 			{@const fieldComments = comments.filter((comment) => comment.field === field.name)}
-			{#if wide}
+			{#if isMediaField(field)}
+				<section class="group/field flex max-w-[656px] flex-col gap-2" data-field={field.name}>
+					{@render fieldLabel(field)}
+					<MediaStage
+						kind={field.type}
+						value={record.values[field.name]}
+						comments={fieldComments}
+						pending={composer?.field === field.name ? composer.area : undefined}
+						{editable}
+						keys={mediaKeys && field === leadPlayer}
+						oncompose={(anchor) => openComposer({ field: field.name, ...anchor })}
+						onremove={(id) => session.removeComment(index, id)}
+					/>
+					{@render composerBox(field.name)}
+				</section>
+			{:else if wide}
 				<section
 					class="group/field grid grid-cols-[minmax(0,540px)_180px] gap-x-7"
 					data-field={field.name}

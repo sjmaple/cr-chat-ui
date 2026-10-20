@@ -15,6 +15,47 @@ import type {
 	ReviewSuggestionsMode,
 } from "$lib/types/MlReview";
 
+const media = vi.hoisted(() => {
+	const rate = 8000;
+	const bytes = new Uint8Array(44 + rate);
+	const view = new DataView(bytes.buffer);
+	const text = (at: number, value: string) =>
+		[...value].forEach((char, i) => view.setUint8(at + i, char.charCodeAt(0)));
+	text(0, "RIFF");
+	view.setUint32(4, 36 + rate, true);
+	text(8, "WAVEfmt ");
+	view.setUint32(16, 16, true);
+	view.setUint16(20, 1, true);
+	view.setUint16(22, 1, true);
+	view.setUint32(24, rate, true);
+	view.setUint32(28, rate, true);
+	view.setUint16(32, 1, true);
+	view.setUint16(34, 8, true);
+	text(36, "data");
+	view.setUint32(40, rate, true);
+	bytes.fill(128, 44);
+	return {
+		wav: `data:audio/wav;base64,${btoa(String.fromCharCode(...bytes))}`,
+		png: `data:image/svg+xml,${encodeURIComponent(
+			'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#ccc"/></svg>'
+		)}`,
+	};
+});
+
+/** the test browser has no network, local media stands in for the Hub files */
+vi.mock("$lib/utils/review/view", async (importOriginal) => {
+	const real = await importOriginal<typeof import("$lib/utils/review/view")>();
+	return {
+		...real,
+		imageUrl: (uri: string) =>
+			uri.endsWith("/local.wav")
+				? media.wav
+				: uri.endsWith("/local.svg")
+					? media.png
+					: real.imageUrl(uri),
+	};
+});
+
 const CONVERSATION = "0123456789abcdef01234567";
 const REVIEW = "89abcdef0123456789abcdef";
 
@@ -850,6 +891,116 @@ describe("MlReviewPane", () => {
 			(container.querySelector("[data-table-row='0']") as HTMLElement).click();
 			await tick();
 			expect(container.querySelector("[data-row-detail]")?.textContent).toContain("refund please");
+		});
+	});
+
+	describe("media comments", () => {
+		const mediaReview = (fields: ReviewSchema["fields"], values: Record<string, unknown>) =>
+			payload({
+				schema: {
+					title: "clips",
+					idField: "id",
+					fields,
+					questions: [{ name: "ok", type: "boolean", required: true }],
+					suggestions: "none",
+				},
+				records: [{ id: "c1", values }],
+			});
+
+		async function addComment(container: HTMLElement, body: string) {
+			await vi.waitFor(() =>
+				expect(container.querySelector("textarea[aria-label='Comment']")).not.toBeNull()
+			);
+			const box = container.querySelector("textarea[aria-label='Comment']") as HTMLTextAreaElement;
+			box.value = body;
+			box.dispatchEvent(new Event("input", { bubbles: true }));
+			await tick();
+			button(container, "Add comment").click();
+			await tick();
+		}
+
+		const pointer = (target: Element, type: string, fx: number, fy = 0.5) => {
+			const box = target.getBoundingClientRect();
+			target.dispatchEvent(
+				new PointerEvent(type, {
+					bubbles: true,
+					pointerId: 1,
+					button: 0,
+					clientX: box.left + box.width * fx,
+					clientY: box.top + box.height * fy,
+				})
+			);
+		};
+
+		async function drag(target: Element, from: [number, number], to: [number, number]) {
+			pointer(target, "pointerdown", ...from);
+			pointer(target, "pointermove", ...to);
+			pointer(target, "pointerup", ...to);
+			await tick();
+		}
+
+		it("comments on an audio clip at the playhead with C", async () => {
+			const { container, session } = await mount(
+				mediaReview([{ name: "clip", type: "audio" }], { clip: "hf://datasets/o/s/local.wav" })
+			);
+			expect(container.querySelector("[data-media-stage='audio']")).not.toBeNull();
+			await press("c");
+			expect(container.querySelector("[data-composer-anchor]")?.textContent).toContain("0:00");
+			await addComment(container, "Speaker overlap");
+			expect(session()?.draft(0)?.comments[0]).toMatchObject({
+				field: "clip",
+				time: { start: 0 },
+				body: "Speaker overlap",
+			});
+			expect(container.querySelector("[data-time-pin='1']")).not.toBeNull();
+		});
+
+		it("comments on a range dragged along the audio bar", async () => {
+			const { container, session } = await mount(
+				mediaReview([{ name: "clip", type: "audio" }], { clip: "hf://datasets/o/s/local.wav" })
+			);
+			const bar = container.querySelector("[data-seek-bar]") as HTMLElement;
+			await vi.waitFor(() => expect(bar.getAttribute("aria-valuemax")).toBe("1"));
+			await drag(bar, [0.1, 0.5], [0.6, 0.5]);
+			await addComment(container, "Drops out");
+			const time = session()?.draft(0)?.comments[0]?.time;
+			expect(time?.start).toBeCloseTo(0.1, 1);
+			expect(time?.end).toBeCloseTo(0.6, 1);
+		});
+
+		it("marks an area on an image with M", async () => {
+			const { container, session } = await mount(
+				mediaReview([{ name: "image", type: "image" }], { image: "hf://datasets/o/s/local.svg" })
+			);
+			await press("m");
+			const layer = container.querySelector("[data-area-layer]") as HTMLElement;
+			await drag(layer, [0.25, 0.1], [0.75, 0.6]);
+			expect(container.querySelector("[data-composer-anchor]")?.textContent).toContain(
+				"area 25%,10% 50%x50%"
+			);
+			await addComment(container, "Garbled sign");
+			const comment = session()?.draft(0)?.comments[0];
+			expect(comment?.field).toBe("image");
+			expect(comment?.time).toBeUndefined();
+			expect(comment?.area?.w).toBeCloseTo(0.5, 2);
+			expect(container.querySelector("[data-area-box='1']")).not.toBeNull();
+		});
+
+		it("pins a box on a video to the frame it was drawn on", async () => {
+			const { container, session } = await mount(
+				mediaReview([{ name: "video", type: "video" }], { video: "hf://datasets/o/s/local.wav" })
+			);
+			await press("m");
+			const layer = container.querySelector(
+				"[data-media-stage='video'] [data-area-layer]"
+			) as HTMLElement;
+			await drag(layer, [0.1, 0.1], [0.4, 0.5]);
+			await addComment(container, "Sail splits");
+			expect(session()?.draft(0)?.comments[0]).toMatchObject({
+				field: "video",
+				time: { start: 0 },
+				area: { x: 0.1, y: 0.1 },
+			});
 		});
 	});
 
