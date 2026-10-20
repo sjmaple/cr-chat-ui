@@ -696,9 +696,6 @@
 		if (!loading) untrack(() => mlReviews.refreshOpen());
 	});
 
-	// a review submitted after the chat moved on reaches the model as the next user message
-	$effect(() => mlReviews.setDeliver((text) => sendFixRequest(text)));
-
 	const budgetClient = useAPIClient();
 
 	/**

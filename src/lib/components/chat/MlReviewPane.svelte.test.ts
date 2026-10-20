@@ -4,7 +4,7 @@ import { render } from "vitest-browser-svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import superjson from "superjson";
 import { tick } from "svelte";
-import { setPage } from "$lib/components/__tests__/appMocks";
+import { navigation, setPage } from "$lib/components/__tests__/appMocks";
 import { mlReviews, type ReviewPayload } from "$lib/stores/mlReview.svelte";
 import { sidePane } from "$lib/stores/sidePane.svelte";
 import { MessageReviewUpdateType, MessageUpdateType } from "$lib/types/MessageUpdate";
@@ -78,6 +78,7 @@ function fakeServer(review: ReviewPayload) {
 	let release: (() => void) | undefined;
 	let submitAnswer: unknown = { ok: true, files: [] };
 	let conflict: ReviewDraft | undefined;
+	let onSubmit: (() => void) | undefined;
 	const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? "GET";
@@ -100,6 +101,7 @@ function fakeServer(review: ReviewPayload) {
 		}
 		if (method === "POST" && url.endsWith("/submit")) {
 			submits.push(JSON.parse(String(init?.body)));
+			onSubmit?.();
 			return Response.json(submitAnswer);
 		}
 		return new Response("{}", { status: 404 });
@@ -117,6 +119,9 @@ function fakeServer(review: ReviewPayload) {
 		},
 		answerSubmit(body: unknown) {
 			submitAnswer = body;
+		},
+		whenSubmitted(fn: () => void) {
+			onSubmit = fn;
 		},
 		conflictOnce(draft: ReviewDraft) {
 			conflict = draft;
@@ -245,7 +250,9 @@ describe("MlReviewPane", () => {
 		review.status = "detached";
 		mlReviews.refreshOpen();
 		await vi.waitFor(() =>
-			expect(container.textContent).toContain("submitting sends the review as a message")
+			expect(container.textContent?.replace(/\s+/g, " ")).toContain(
+				"submitting posts the review as your next message"
+			)
 		);
 	});
 
@@ -547,12 +554,7 @@ describe("MlReviewPane", () => {
 		expect(session()?.draft(0)?.answers.kind).toBe("bug");
 	});
 
-	it("submits after the drafts are saved, and hands a detached review to the chat", async () => {
-		const { container, server } = await mount(payload({ status: "detached" }));
-		const deliver = vi.fn(() => true);
-		const stop = mlReviews.setDeliver(deliver);
-		server.answerSubmit({ deliverAsMessage: true, text: "Review submitted: approve" });
-
+	async function submitAll(container: HTMLElement) {
 		for (let i = 0; i < RECORDS.length; i += 1) {
 			await press("1");
 			await press("j");
@@ -561,12 +563,53 @@ describe("MlReviewPane", () => {
 		await tick();
 		const finish = container.querySelector("[aria-label='Finish your review']") as HTMLElement;
 		button(finish, "Submit").click();
+	}
 
-		await vi.waitFor(() => expect(deliver).toHaveBeenCalledWith("Review submitted: approve"), {
+	it("submits after the drafts are saved, and follows the message the server posted", async () => {
+		const review = payload({ status: "detached" });
+		const { container, server } = await mount(review);
+		server.answerSubmit({ ok: true, files: [], delivery: "sent" });
+		server.whenSubmitted(() => {
+			review.status = "submitted";
+			review.verdict = "approve";
+			review.delivery = { status: "sent", messageId: "m-1" };
+		});
+
+		await submitAll(container);
+		await vi.waitFor(() => expect(navigation.invalidate).toHaveBeenCalledWith("conversation:id"), {
 			timeout: 5_000,
 		});
 		expect(server.patches.map((patch) => patch.index).sort()).toEqual([0, 1, 2]);
 		expect(server.submits[0]).toMatchObject({ verdict: "approve" });
-		stop();
+		await vi.waitFor(() =>
+			expect(container.querySelector("[data-delivery='sent']")?.textContent).toContain(
+				"Posted as your message"
+			)
+		);
+	});
+
+	it("waits for a queued submission to be posted before following it", async () => {
+		const review = payload({ status: "detached" });
+		const { container, server } = await mount(review);
+		server.answerSubmit({ ok: true, files: [], delivery: "queued" });
+		server.whenSubmitted(() => {
+			review.status = "submitted";
+			review.verdict = "approve";
+			review.delivery = { status: "pending" };
+		});
+
+		await submitAll(container);
+		await vi.waitFor(
+			() => expect(container.querySelector("[data-delivery='pending']")).not.toBeNull(),
+			{
+				timeout: 5_000,
+			}
+		);
+		expect(navigation.invalidate).not.toHaveBeenCalled();
+
+		review.delivery = { status: "sent", messageId: "m-2" };
+		await vi.waitFor(() => expect(navigation.invalidate).toHaveBeenCalledWith("conversation:id"), {
+			timeout: 6_000,
+		});
 	});
 });

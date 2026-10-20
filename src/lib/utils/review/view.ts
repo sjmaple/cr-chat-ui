@@ -134,3 +134,15 @@ export function imageUrl(uri: string): string | undefined {
 		revision ?? "main"
 	)}/${path}`;
 }
+
+export type DeliveryStatus = "pending" | "sending" | "sent" | "failed";
+
+const DELIVERY_LABEL: Record<DeliveryStatus, string> = {
+	pending: "Posts as your message once the current turn ends",
+	sending: "Posting as your message",
+	sent: "Posted as your message",
+	failed: "Could not post this review to the chat",
+};
+
+/** a submission the turn had moved past goes out as the user's next message */
+export const deliveryLabel = (status: DeliveryStatus): string => DELIVERY_LABEL[status];

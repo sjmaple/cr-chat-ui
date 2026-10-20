@@ -1,7 +1,6 @@
 import { base } from "$app/paths";
 import superjson from "superjson";
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
-import { pendingComposerPayload } from "$lib/stores/pendingComposerPayload";
 import type { MlFileRef } from "$lib/types/MlFile";
 import type {
 	ReviewAnswer,
@@ -16,8 +15,13 @@ import type {
 import { blockers, type ReviewBlocker } from "$lib/utils/review/answers";
 import { draftStatus } from "$lib/utils/review/view";
 import { mcpSelection } from "$lib/utils/sendElicitationAnswer";
+import { safeInvalidate } from "$lib/utils/safeInvalidate";
+import { UrlDependency } from "$lib/types/UrlDependency";
 
 export const REVIEW_SAVE_DEBOUNCE_MS = 250;
+/** a queued submission is posted within about 10 s of the running turn ending */
+export const REVIEW_DELIVERY_POLL_MS = 2_000;
+const DELIVERY_POLL_LIMIT = 90;
 
 type FetchFn = typeof globalThis.fetch;
 
@@ -31,6 +35,8 @@ export interface ReviewPayload {
 	verdict?: ReviewVerdict;
 	summary?: string;
 	result?: { text: string; files: MlFileRef[] };
+	/** the server posts a submission the turn had moved past as the user's next message */
+	delivery?: { status: "pending" | "sending" | "sent" | "failed"; messageId?: string };
 	createdAt: Date;
 	updatedAt: Date;
 }
@@ -345,6 +351,19 @@ export class ReviewSession {
 		this.#again.add(index);
 	}
 
+	/** the posted message and its run reach the page once the conversation reloads */
+	#followDelivery(attempt = 0) {
+		setTimeout(async () => {
+			if (!this.#alive) return;
+			await this.refresh();
+			const status = this.payload?.delivery?.status;
+			if (status === "sent") void this.#owner.followConversation();
+			else if (status !== "failed" && attempt + 1 < DELIVERY_POLL_LIMIT) {
+				this.#followDelivery(attempt + 1);
+			}
+		}, REVIEW_DELIVERY_POLL_MS);
+	}
+
 	async submit(verdict: ReviewVerdict): Promise<boolean> {
 		if (this.submitting || !this.editable) return false;
 		this.submitting = true;
@@ -374,8 +393,9 @@ export class ReviewSession {
 				return false;
 			}
 			this.verdict = verdict;
-			if (body?.deliverAsMessage && typeof body.text === "string") this.#owner.deliver(body.text);
 			await this.refresh();
+			if (body?.delivery === "sent") void this.#owner.followConversation();
+			else if (body?.delivery === "queued") this.#followDelivery();
 			return true;
 		} catch {
 			if (this.#alive) this.submitError = UNREACHABLE;
@@ -393,7 +413,6 @@ export class MlReviewsStore {
 	epoch = 0;
 	#sessions = new SvelteMap<string, ReviewSession>();
 	#disposers: (() => void)[] = [];
-	#deliver: ((text: string) => boolean) | undefined;
 	readonly #fetcher: FetchFn | undefined;
 
 	/** the fetch is injectable so a spec never opens a socket */
@@ -453,18 +472,9 @@ export class MlReviewsStore {
 		this.conversationId = undefined;
 	}
 
-	/** the chat send path, for a review whose turn already moved on */
-	setDeliver(deliver: (text: string) => boolean): () => void {
-		this.#deliver = deliver;
-		return () => {
-			if (this.#deliver === deliver) this.#deliver = undefined;
-		};
-	}
-
-	deliver(text: string): void {
-		if (this.#deliver?.(text)) return;
-		// a turn is running, so the submission waits in the composer
-		pendingComposerPayload.set({ text });
+	/** reloads the open conversation so a message the server posted, and its run, show up */
+	async followConversation(): Promise<void> {
+		await safeInvalidate(UrlDependency.Conversation);
 	}
 }
 

@@ -8,6 +8,7 @@
 	import type { MlFileRef } from "$lib/types/MlFile";
 	import type { ReviewVerdict } from "$lib/types/MlReview";
 	import { formatFileRef } from "$lib/utils/mlRegistry";
+	import { deliveryLabel } from "$lib/utils/review/view";
 
 	import CarbonDataTable from "~icons/carbon/data-table";
 	import CarbonCheckmarkFilled from "~icons/carbon/checkmark-filled";
@@ -39,6 +40,7 @@
 
 	let session = $derived(interactive ? mlReviews.get(request.reviewId) : undefined);
 	let status = $derived(resolved ? "submitted" : session?.payload?.status);
+	let delivery = $derived(session?.payload?.delivery);
 	let isOpen = $derived(
 		sidePane.open && sidePane.view === "review" && sidePane.reviewId === request.reviewId
 	);
@@ -122,6 +124,19 @@
 	</div>
 
 	{#if frozen}
+		{#if delivery}
+			<p
+				class={[
+					"text-xs",
+					delivery.status === "failed"
+						? "text-red-600 dark:text-red-400"
+						: "text-gray-500 dark:text-gray-400",
+				]}
+				data-delivery={delivery.status}
+			>
+				{deliveryLabel(delivery.status)}
+			</p>
+		{/if}
 		{#if frozen.files.length}
 			<div class="flex flex-wrap gap-1.5">
 				{#each frozen.files as file (`${file.name}@${file.version}`)}

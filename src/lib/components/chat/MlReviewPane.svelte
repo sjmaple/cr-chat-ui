@@ -13,7 +13,7 @@
 	import { useIsDesktop } from "$lib/utils/isDesktop.svelte";
 	import { formatFileRef } from "$lib/utils/mlRegistry";
 	import { isAnswered } from "$lib/utils/review/answers";
-	import { keyOptions, pick, suggestionVisible } from "$lib/utils/review/view";
+	import { deliveryLabel, keyOptions, pick, suggestionVisible } from "$lib/utils/review/view";
 	import MarkdownRenderer from "./MarkdownRenderer.svelte";
 	import SidePane from "./SidePane.svelte";
 	import ImageField from "../review/fields/ImageField.svelte";
@@ -682,6 +682,17 @@
 								{formatFileRef(file)}
 							</button>
 						{/each}
+						{#if session.payload.delivery}
+							<span
+								class={[
+									"w-full",
+									session.payload.delivery.status === "failed" && "text-red-600 dark:text-red-400",
+								]}
+								data-delivery={session.payload.delivery.status}
+							>
+								{deliveryLabel(session.payload.delivery.status)}
+							</span>
+						{/if}
 					</div>
 				{:else if status === "expired"}
 					<p
@@ -695,7 +706,8 @@
 						class="border-b border-gray-100 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-gray-800 dark:bg-amber-500/10 dark:text-amber-200"
 						role="status"
 					>
-						The chat moved on. Your drafts are kept, and submitting sends the review as a message.
+						The chat moved on. Your drafts are kept, and submitting posts the review as your next
+						message.
 					</p>
 				{/if}
 
