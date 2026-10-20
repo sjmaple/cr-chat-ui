@@ -8,6 +8,7 @@
 	import CarbonCheckmark from "~icons/carbon/checkmark";
 	import CarbonChat from "~icons/carbon/chat";
 	import CarbonGrid from "~icons/carbon/grid";
+	import CarbonMaximize from "~icons/carbon/maximize";
 	import CarbonSquareOutline from "~icons/carbon/square-outline";
 
 	interface Props {
@@ -136,47 +137,67 @@
 					: undefined}
 			{@const on = selected.has(index)}
 			{@const notes = commentCount(index)}
-			<button
-				type="button"
-				class="flex flex-col gap-1.5 border-0 bg-transparent p-0 text-left"
-				aria-label="Image {index + 1}{caption ? `, ${plainText(record.values[caption.name])}` : ''}"
-				aria-pressed={on}
-				data-tile={index}
-				onclick={() => toggle(index)}
-				ondblclick={() => onopen(index)}
-			>
-				<span
-					class={[
-						"relative block aspect-square overflow-hidden rounded-[10px] bg-gray-100 dark:bg-gray-800",
-						on &&
-							"shadow-[0_0_0_2px_white,0_0_0_4px_#2563eb] dark:shadow-[0_0_0_2px_#111,0_0_0_4px_#60a5fa]",
-					]}
+			<div class="group relative">
+				<button
+					type="button"
+					class="flex w-full flex-col gap-1.5 border-0 bg-transparent p-0 text-left"
+					aria-label="Image {index + 1}{caption
+						? `, ${plainText(record.values[caption.name])}`
+						: ''}"
+					aria-pressed={on}
+					data-tile={index}
+					onclick={() => toggle(index)}
+					ondblclick={() => onopen(index)}
+					onkeydown={(e) => {
+						if (e.key !== "Enter") return;
+						e.preventDefault();
+						onopen(index);
+					}}
 				>
-					{#if src}
-						<img {src} alt="" loading="lazy" class="block size-full object-cover" />
-					{/if}
-					{#if on}
-						<span
-							class="absolute top-1.5 left-1.5 flex size-5 items-center justify-center rounded-full bg-blue-600 text-white dark:bg-blue-400"
-						>
-							<CarbonCheckmark class="text-xs" />
-						</span>
-					{/if}
-					{#if notes > 0}
-						<span
-							class="absolute top-1.5 right-1.5 flex h-5 items-center gap-[3px] rounded-full bg-amber-200 px-1.5 text-[11px] font-bold text-gray-900"
-						>
-							<CarbonChat class="text-[10px]" />{notes}
-						</span>
-					{/if}
+					<span
+						class={[
+							"relative block aspect-square overflow-hidden rounded-[10px] bg-gray-100 dark:bg-gray-800",
+							on &&
+								"shadow-[0_0_0_2px_white,0_0_0_4px_#2563eb] dark:shadow-[0_0_0_2px_#111,0_0_0_4px_#60a5fa]",
+						]}
+					>
+						{#if src}
+							<img {src} alt="" loading="lazy" class="block size-full object-cover" />
+						{/if}
+						{#if on}
+							<span
+								class="absolute top-1.5 left-1.5 flex size-5 items-center justify-center rounded-full bg-blue-600 text-white dark:bg-blue-400"
+							>
+								<CarbonCheckmark class="text-xs" />
+							</span>
+						{/if}
+						{#if notes > 0}
+							<span
+								class="absolute top-1.5 right-1.5 flex h-5 items-center gap-[3px] rounded-full bg-amber-200 px-1.5 text-[11px] font-bold text-gray-900"
+							>
+								<CarbonChat class="text-[10px]" />{notes}
+							</span>
+						{/if}
+					</span>
+					<span class="truncate text-[12.5px] text-gray-500 dark:text-gray-400">
+						{#if caption}<b class="font-medium text-gray-900 dark:text-gray-100"
+								>{plainText(record.values[caption.name])}</b
+							> ·
+						{/if}#{index + 1}
+					</span>
+				</button>
+				<span class="pointer-events-none absolute inset-x-0 top-0 aspect-square">
+					<button
+						type="button"
+						class="pointer-events-auto absolute right-1.5 bottom-1.5 flex size-7 items-center justify-center rounded-lg bg-gray-900/75 text-white opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-gray-900 focus-visible:opacity-100"
+						aria-label="Open image {index + 1}"
+						data-open-tile={index}
+						onclick={() => onopen(index)}
+					>
+						<CarbonMaximize class="text-sm" />
+					</button>
 				</span>
-				<span class="truncate text-[12.5px] text-gray-500 dark:text-gray-400">
-					{#if caption}<b class="font-medium text-gray-900 dark:text-gray-100"
-							>{plainText(record.values[caption.name])}</b
-						> ·
-					{/if}#{index + 1}
-				</span>
-			</button>
+			</div>
 		{/each}
 	</div>
 </div>

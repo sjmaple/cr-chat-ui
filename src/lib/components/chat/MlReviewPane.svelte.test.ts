@@ -889,6 +889,37 @@ describe("MlReviewPane", () => {
 			expect(session()?.draft(1)).toBeUndefined();
 			expect(session()?.draft(2)?.comments[0]).toMatchObject({ body: "Not food." });
 		});
+
+		const photos = () =>
+			payload({
+				schema: {
+					title: "photos",
+					idField: "id",
+					fields: [{ name: "image", type: "image" }],
+					questions: [],
+					suggestions: "none",
+				},
+				records: [1, 2, 3].map((n) => ({
+					id: `i${n}`,
+					values: { image: `hf://datasets/o/s/${n}.png` },
+				})),
+			});
+
+		it("opens the focused image on Enter", async () => {
+			const { container } = await mount(photos());
+			const tile = container.querySelector("[data-tile='1']") as HTMLButtonElement;
+			tile.focus();
+			await press("Enter", tile);
+			expect(container.querySelector("[data-grid-view]")).toBeNull();
+			expect(position(container)).toContain("2 of 3");
+		});
+
+		it("opens an image from its open button", async () => {
+			const { container } = await mount(photos());
+			(container.querySelector("button[aria-label='Open image 3']") as HTMLButtonElement).click();
+			await tick();
+			expect(position(container)).toContain("3 of 3");
+		});
 	});
 });
 
