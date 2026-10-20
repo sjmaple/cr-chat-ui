@@ -94,3 +94,16 @@ export const quoteAnchors: Action<
 		},
 	};
 };
+
+let pendingComment: (() => void) | undefined;
+
+/** the field holding a live selection, so the C key comments on it rather than the record */
+export function offerSelectionComment(comment: (() => void) | undefined): void {
+	pendingComment = comment;
+}
+
+export function takeSelectionComment(): (() => void) | undefined {
+	const comment = pendingComment;
+	pendingComment = undefined;
+	return comment;
+}

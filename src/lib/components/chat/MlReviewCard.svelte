@@ -1,20 +1,25 @@
 <script lang="ts">
+	import { untrack } from "svelte";
 	import { mlReviews } from "$lib/stores/mlReview.svelte";
 	import { sidePane } from "$lib/stores/sidePane.svelte";
 	import type {
 		MessageReviewRequestUpdate,
 		MessageReviewResolvedUpdate,
 	} from "$lib/types/MessageUpdate";
-	import type { MlFileRef } from "$lib/types/MlFile";
 	import type { ReviewVerdict } from "$lib/types/MlReview";
 	import { formatFileRef } from "$lib/utils/mlRegistry";
 	import { deliveryLabel } from "$lib/utils/review/view";
 
-	import CarbonDataTable from "~icons/carbon/data-table";
-	import CarbonCheckmarkFilled from "~icons/carbon/checkmark-filled";
-	import CarbonWarningAlt from "~icons/carbon/warning-alt";
+	import CarbonArrowRight from "~icons/carbon/arrow-right";
 	import CarbonChat from "~icons/carbon/chat";
+	import CarbonCheckmarkOutline from "~icons/carbon/checkmark-outline";
 	import CarbonDocument from "~icons/carbon/document";
+	import CarbonEdit from "~icons/carbon/edit";
+	import CarbonInformation from "~icons/carbon/information";
+	import CarbonTaskComplete from "~icons/carbon/task-complete";
+	import CarbonTime from "~icons/carbon/time";
+	import CarbonView from "~icons/carbon/view";
+	import CarbonWarning from "~icons/carbon/warning-alt";
 
 	interface Props {
 		request: MessageReviewRequestUpdate;
@@ -34,16 +39,18 @@
 
 	$effect(() => {
 		if (interactive && conversationId && !resolved) {
-			mlReviews.ensure(conversationId, request.reviewId);
+			const reviewId = request.reviewId;
+			// a store reset must not re-run this, a card still mounted would re-bind the old conversation
+			untrack(() => mlReviews.ensure(conversationId, reviewId));
 		}
 	});
 
 	let session = $derived(interactive ? mlReviews.get(request.reviewId) : undefined);
-	let status = $derived(resolved ? "submitted" : session?.payload?.status);
-	let delivery = $derived(session?.payload?.delivery);
-	let isOpen = $derived(
-		sidePane.open && sidePane.view === "review" && sidePane.reviewId === request.reviewId
-	);
+	let payload = $derived(session?.payload);
+	let status = $derived(resolved ? "submitted" : payload?.status);
+	let label = $derived(request.mode === "label");
+	let kind = $derived(label ? "Labelling task" : "Review request");
+	let confirming = $state(false);
 
 	let frozen = $derived.by(() => {
 		if (resolved) {
@@ -55,170 +62,354 @@
 				files: resolved.files,
 			};
 		}
-		if (session?.payload?.status !== "submitted") return undefined;
+		if (payload?.status !== "submitted" || !session) return undefined;
 		return {
-			verdict: session.payload.verdict ?? "comment",
+			verdict: payload.verdict ?? "comment",
 			answered: session.counts.answered,
 			skipped: session.counts.skipped,
 			comments: session.counts.comments,
-			files: session.payload.result?.files ?? [],
+			files: payload.result?.files ?? [],
 		};
 	});
 
-	let progress = $derived.by(() => {
-		const comments = session?.counts.comments ?? 0;
-		const commentText = `${comments} comment${comments === 1 ? "" : "s"}`;
-		if (request.questions === 0) {
-			return `${request.records} record${request.records === 1 ? "" : "s"} · ${commentText}`;
-		}
-		return `${session?.counts.answered ?? 0} / ${request.records} answered · ${commentText}`;
-	});
-	let fraction = $derived(
-		request.records > 0 ? Math.min(1, (session?.counts.answered ?? 0) / request.records) : 0
+	let counts = $derived(session?.counts ?? { answered: 0, skipped: 0, comments: 0 });
+	let firstTodo = $derived(Math.max(0, session?.states.indexOf("todo") ?? 0));
+	let started = $derived(counts.answered + counts.skipped + counts.comments > 0);
+	let ready = $derived(label && !!session && session.blockers.length === 0 && counts.answered > 0);
+	let commentedRecords = $derived(
+		Object.values(session?.drafts ?? {}).filter((draft) => draft.comments.length > 0).length
 	);
 
-	function openFile(file: MlFileRef) {
-		sidePane.openRegistry(file);
+	let subtitle = $derived.by(() => {
+		const schema = payload?.schema;
+		if (!schema) return undefined;
+		if (schema.questions.length === 0) {
+			return "Skim them and comment on anything off. No questions to answer.";
+		}
+		const required = schema.questions.filter((question) => question.required).length;
+		const parts = [
+			`${schema.questions.length} question${schema.questions.length === 1 ? "" : "s"} each${required ? `, ${required} required` : ""}`,
+		];
+		const guesses = payload.records.some((record) => record.suggestions);
+		if (guesses && schema.suggestions === "after_answer") {
+			parts.push("the model's guesses stay hidden until you answer");
+		} else if (guesses && schema.suggestions === "shown") {
+			parts.push("the model's guesses show beside each question");
+		}
+		return parts.join(" · ");
+	});
+
+	const pct = (n: number) => `${Math.min(100, (n / Math.max(request.records, 1)) * 100)}%`;
+
+	function open(screen?: "finish") {
+		sidePane.openReview(request.reviewId);
+		if (session && screen) session.screen = screen;
 	}
+
+	function continueAt(index: number) {
+		sidePane.openReview(request.reviewId);
+		session?.openRecord(index);
+	}
+
+	async function approveAll() {
+		confirming = false;
+		await session?.submit("approve");
+	}
+
+	const card =
+		"my-2 flex w-full max-w-[450px] flex-col gap-3 rounded-[14px] border border-gray-200 bg-white p-4 has-[+.prose]:mb-4! [.prose+&]:mt-4! dark:border-gray-800 dark:bg-gray-900";
+	const row =
+		"my-2 flex w-full max-w-[450px] items-center gap-2.5 rounded-[14px] border border-gray-200 bg-white px-4 py-3 has-[+.prose]:mb-4! [.prose+&]:mt-4! dark:border-gray-800 dark:bg-gray-900";
+	const tile =
+		"flex size-7 flex-none items-center justify-center rounded-lg bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300";
+	const pill = "rounded-full px-2 py-[5px] text-xs leading-none font-medium whitespace-nowrap";
+	const primary =
+		"inline-flex h-9 items-center gap-1.5 rounded-[9px] bg-gray-900 px-3.5 text-[13px] font-semibold text-white hover:bg-gray-800 disabled:opacity-50 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white";
+	const plain =
+		"inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-gray-200 bg-white px-3.5 text-[13px] font-semibold text-gray-900 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:hover:bg-gray-800";
 </script>
 
-<div
-	data-exclude-from-copy
-	class="my-2 flex w-full max-w-md flex-col gap-2.5 rounded-xl border bg-white px-3.5 py-3 shadow-xs has-[+.prose]:mb-4! dark:bg-gray-800/80 [.prose+&]:mt-4!
-		{isOpen
-		? 'border-blue-300 ring-1 ring-blue-300 dark:border-blue-500/30 dark:ring-blue-500/30'
-		: 'border-gray-200 dark:border-gray-700'}"
-	role="group"
-	aria-label="Review: {request.title}"
->
-	<div class="flex items-center gap-3">
-		<div
-			class="flex size-9 flex-none items-center justify-center rounded-lg bg-gray-100 text-gray-500 dark:bg-gray-700/70 dark:text-gray-300"
-		>
-			{#if frozen?.verdict === "approve"}
-				<CarbonCheckmarkFilled class="text-base text-green-600 dark:text-green-500" />
-			{:else if frozen?.verdict === "request_changes"}
-				<CarbonWarningAlt class="text-base text-amber-600 dark:text-amber-500" />
-			{:else if frozen}
-				<CarbonChat class="text-base" />
-			{:else}
-				<CarbonDataTable class="text-base" />
-			{/if}
+{#snippet header(pillText: string, pillClass: string)}
+	<div class="flex items-center gap-2.5">
+		<div class={tile}>
+			{#if label}<CarbonTaskComplete class="text-base" />{:else}<CarbonView
+					class="text-base"
+				/>{/if}
 		</div>
-		<div class="min-w-0 flex-1">
-			<p class="truncate text-sm font-medium text-gray-800 dark:text-gray-200">
-				{request.title}
-			</p>
-			<p class="truncate text-xs text-gray-500 dark:text-gray-400">
-				{#if frozen}
-					{VERDICT_LABEL[frozen.verdict]} · {frozen.answered} answered{frozen.skipped
-						? ` · ${frozen.skipped} skipped`
-						: ""} · {frozen.comments} comment{frozen.comments === 1 ? "" : "s"}
-				{:else}
-					{request.records} record{request.records === 1 ? "" : "s"}{request.questions
-						? ` · ${request.questions} question${request.questions === 1 ? "" : "s"}`
-						: ""}
-				{/if}
-			</p>
-		</div>
+		<div class="flex-1 text-[13px] text-gray-500 dark:text-gray-400">{kind}</div>
+		<span class="{pill} {pillClass}" data-card-pill>{pillText}</span>
 	</div>
+{/snippet}
 
-	{#if frozen}
-		{#if delivery}
-			<p
-				class={[
-					"text-xs",
-					delivery.status === "failed"
-						? "text-red-600 dark:text-red-400"
-						: "text-gray-500 dark:text-gray-400",
-				]}
-				data-delivery={delivery.status}
-			>
-				{deliveryLabel(delivery.status)}
-			</p>
+{#snippet bar()}
+	<div class="flex h-1.5 gap-px overflow-hidden rounded-[3px] bg-gray-100 dark:bg-gray-800">
+		<div class="bg-green-600 dark:bg-green-500" style="width: {pct(counts.answered)}"></div>
+		<div class="bg-amber-500" style="width: {pct(counts.skipped)}"></div>
+	</div>
+{/snippet}
+
+{#snippet tally(answeredOnly: boolean)}
+	<div
+		class="flex flex-wrap gap-x-3.5 text-[13px] text-gray-500 dark:text-gray-400"
+		data-card-tally
+	>
+		<span>
+			<b class="font-semibold text-gray-900 dark:text-gray-100">{counts.answered}</b>
+			{answeredOnly ? "answered" : `of ${request.records} answered`}
+		</span>
+		{#if counts.skipped > 0}<span>{counts.skipped} skipped</span>{/if}
+		{#if counts.comments > 0}
+			<span>{counts.comments} comment{counts.comments === 1 ? "" : "s"}</span>
 		{/if}
-		{#if frozen.files.length}
-			<div class="flex flex-wrap gap-1.5">
+	</div>
+{/snippet}
+
+{#if frozen}
+	{#if !interactive}
+		<div class={row} data-exclude-from-copy role="group" aria-label="Review: {request.title}">
+			<div class="{tile} bg-green-50 text-green-700 dark:bg-green-400/10 dark:text-green-400">
+				<CarbonCheckmarkOutline class="text-base" />
+			</div>
+			<div class="min-w-0 flex-1 text-[13px] text-gray-500 dark:text-gray-400">
+				<span class="font-medium text-gray-700 dark:text-gray-300">{request.title}</span>
+				· {VERDICT_LABEL[frozen.verdict].toLowerCase()} · {frozen.comments} comment{frozen.comments ===
+				1
+					? ""
+					: "s"}
+			</div>
+		</div>
+	{:else}
+		<div class={card} data-exclude-from-copy role="group" aria-label="Review: {request.title}">
+			<div class="flex items-center gap-2.5">
+				{#if frozen.verdict === "approve"}
+					<div class="{tile} bg-green-50 text-green-700 dark:bg-green-400/10 dark:text-green-400">
+						<CarbonCheckmarkOutline class="text-base" />
+					</div>
+				{:else if frozen.verdict === "request_changes"}
+					<div class="{tile} bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400">
+						<CarbonEdit class="text-base" />
+					</div>
+				{:else}
+					<div class={tile}><CarbonChat class="text-base" /></div>
+				{/if}
+				<div class="flex-1 text-[13px] text-gray-500 dark:text-gray-400">{kind} · submitted</div>
+				<span
+					class="{pill} {frozen.verdict === 'approve'
+						? 'bg-green-50 text-green-700 dark:bg-green-400/10 dark:text-green-400'
+						: frozen.verdict === 'request_changes'
+							? 'bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'
+							: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'}"
+					data-card-pill
+				>
+					{VERDICT_LABEL[frozen.verdict]}
+				</span>
+			</div>
+			<div class="flex flex-col gap-1">
+				<div class="text-base font-semibold text-gray-900 dark:text-gray-100">{request.title}</div>
+				<div class="text-[13px] text-gray-500 dark:text-gray-400" data-card-tally>
+					{#if label}
+						{frozen.answered} of {request.records} answered{frozen.skipped
+							? ` · ${frozen.skipped} skipped`
+							: ""} · {frozen.comments} comment{frozen.comments === 1 ? "" : "s"}
+					{:else}
+						{frozen.comments} comment{frozen.comments === 1 ? "" : "s"}{commentedRecords
+							? ` on ${commentedRecords} of ${request.records}`
+							: ""}
+					{/if}
+				</div>
+			</div>
+			{#if payload?.summary}
+				<div
+					class="rounded-[10px] bg-gray-50 px-3 py-2.5 text-[13px] leading-normal text-gray-700 dark:bg-gray-800/60 dark:text-gray-300"
+				>
+					“{payload.summary}”
+				</div>
+			{/if}
+			{#if payload?.delivery}
+				<p
+					class={[
+						"m-0 text-xs",
+						payload.delivery.status === "failed"
+							? "text-red-600 dark:text-red-400"
+							: "text-gray-500 dark:text-gray-400",
+					]}
+					data-delivery={payload.delivery.status}
+				>
+					{deliveryLabel(payload.delivery.status)}
+				</p>
+			{/if}
+			<div class="flex flex-wrap items-center gap-2">
 				{#each frozen.files as file (`${file.name}@${file.version}`)}
 					<button
 						type="button"
-						class="inline-flex max-w-full items-center gap-1 rounded-md border border-gray-200 px-1.5 py-0.5 font-mono text-xs text-gray-600 hover:border-gray-300 hover:text-gray-800 disabled:cursor-default disabled:hover:border-gray-200 dark:border-gray-700 dark:text-gray-300 dark:hover:border-gray-600"
-						disabled={!interactive}
-						title={interactive ? "Show in Resources" : undefined}
-						onclick={() => openFile(file)}
+						class="{plain} font-medium"
+						title="Show in Resources"
+						onclick={() => sidePane.openRegistry(file)}
 					>
-						<CarbonDocument class="flex-none text-[11px]" />
-						<span class="truncate">{formatFileRef(file)}</span>
+						<CarbonDocument class="flex-none text-sm" />
+						<span class="max-w-[240px] truncate">{formatFileRef(file)}</span>
 					</button>
 				{/each}
+				<button
+					type="button"
+					class="inline-flex h-9 items-center rounded-[9px] px-3 text-[13px] font-semibold text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800"
+					onclick={() => open()}
+				>
+					View answers
+				</button>
 			</div>
-		{/if}
-	{:else if !interactive}
-		<p class="text-xs text-gray-500 dark:text-gray-400">Not submitted.</p>
-	{:else if session?.load === "missing" || session?.load === "error"}
-		<p class="text-xs text-gray-500 dark:text-gray-400">
-			{session.load === "missing"
-				? "This review is no longer available."
-				: "Could not load the review."}
-		</p>
-	{:else if status === "expired"}
-		<p class="text-xs text-gray-500 dark:text-gray-400">
-			This review expired before it was submitted.
-		</p>
-	{:else}
-		<div class="flex flex-col gap-1">
-			<p class="text-xs text-gray-600 tabular-nums dark:text-gray-300">
-				{session?.load === "ready" ? progress : "Loading…"}
-			</p>
-			{#if request.questions > 0}
-				<div
-					class="h-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700"
-					role="progressbar"
-					aria-label="Records answered"
-					aria-valuemin={0}
-					aria-valuemax={request.records}
-					aria-valuenow={session?.counts.answered ?? 0}
-				>
-					<div class="h-full bg-blue-500 transition-[width]" style="width: {fraction * 100}%"></div>
-				</div>
-			{/if}
-			{#if status === "detached"}
-				<p class="text-xs text-gray-500 dark:text-gray-400">
-					Still open. The chat moved on, so your submission arrives as a message.
-				</p>
-			{/if}
-		</div>
-		{#if session?.submitError}
-			<p class="text-xs text-red-600 dark:text-red-400" role="alert">{session.submitError}</p>
-		{/if}
-		<div class="flex flex-wrap items-center gap-1.5">
-			<button
-				type="button"
-				class="btn rounded-lg bg-black px-2.5 py-1 text-xs font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-gray-200"
-				onclick={() => sidePane.openReview(request.reviewId)}
-			>
-				Open review
-			</button>
-			{#if session?.editable && !session.labelling}
-				<button
-					type="button"
-					class="btn rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700"
-					disabled={session.submitting}
-					onclick={() => session?.submit("approve")}
-				>
-					Approve all
-				</button>
-			{/if}
-			{#if session?.editable && session.blockers.length === 0 && (session.labelling || session.counts.comments > 0)}
-				<button
-					type="button"
-					class="btn rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700"
-					disabled={session.submitting}
-					onclick={() => session?.submit(session.chosenVerdict)}
-				>
-					{session.submitting ? "Submitting…" : "Submit"}
-				</button>
-			{/if}
 		</div>
 	{/if}
-</div>
+{:else if !interactive}
+	<div class={row} data-exclude-from-copy role="group" aria-label="Review: {request.title}">
+		<div class={tile}>
+			{#if label}<CarbonTaskComplete class="text-base" />{:else}<CarbonView
+					class="text-base"
+				/>{/if}
+		</div>
+		<div class="min-w-0 flex-1 text-[13px] text-gray-500 dark:text-gray-400">
+			<span class="font-medium text-gray-700 dark:text-gray-300">{request.title}</span> · not submitted
+		</div>
+	</div>
+{:else if !session || session.load === "loading"}
+	<div class={card} aria-busy="true" aria-label="Review: {request.title}" data-exclude-from-copy>
+		<div class="flex items-center gap-2.5">
+			<div class="size-7 rounded-lg bg-gray-100 dark:bg-gray-800"></div>
+			<div class="h-3 w-24 rounded-md bg-gray-100 dark:bg-gray-800"></div>
+		</div>
+		<div class="h-4 w-60 rounded-md bg-gray-100 dark:bg-gray-800"></div>
+		<div class="h-1.5 w-full rounded-[3px] bg-gray-100 dark:bg-gray-800"></div>
+	</div>
+{:else if session.load === "missing"}
+	<div class={row} data-exclude-from-copy role="group" aria-label="Review: {request.title}">
+		<CarbonInformation class="flex-none text-gray-500" />
+		<div class="flex-1 text-[13px] text-gray-500 dark:text-gray-400">
+			This review is no longer available.
+		</div>
+	</div>
+{:else if session.load === "error"}
+	<div
+		class="{row} py-2 pr-2"
+		data-exclude-from-copy
+		role="group"
+		aria-label="Review: {request.title}"
+	>
+		<CarbonWarning class="flex-none text-red-600 dark:text-red-400" />
+		<div class="flex-1 text-[13px] text-gray-700 dark:text-gray-300">Couldn't load the review.</div>
+		<button type="button" class="{plain} h-8" onclick={() => session?.refresh()}>Retry</button>
+	</div>
+{:else if status === "expired"}
+	<div class={row} data-exclude-from-copy role="group" aria-label="Review: {request.title}">
+		<CarbonTime class="flex-none text-gray-500" />
+		<div class="min-w-0 flex-1 text-[13px] text-gray-500 dark:text-gray-400">
+			<span class="font-medium text-gray-700 dark:text-gray-300">{request.title}</span> · expired before
+			it was submitted
+		</div>
+	</div>
+{:else if status === "detached"}
+	<div class={card} data-exclude-from-copy role="group" aria-label="Review: {request.title}">
+		{@render header("Still open", "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300")}
+		<div class="text-base font-semibold text-gray-900 dark:text-gray-100">{request.title}</div>
+		{#if label}
+			<div class="flex flex-col gap-2">
+				{@render bar()}
+				{@render tally(false)}
+			</div>
+		{/if}
+		<div class="text-[13px] leading-normal text-gray-700 dark:text-gray-300">
+			The conversation moved on. You can still finish; your submission arrives as a new message.
+		</div>
+		<div class="flex gap-2">
+			<button type="button" class={plain} onclick={() => continueAt(firstTodo)}>
+				{label ? `Continue at #${firstTodo + 1}` : "Open review"}
+			</button>
+		</div>
+	</div>
+{:else}
+	<div class={card} data-exclude-from-copy role="group" aria-label="Review: {request.title}">
+		{#if ready}
+			{@render header(
+				"Ready to submit",
+				"bg-green-50 text-green-700 dark:bg-green-400/10 dark:text-green-400"
+			)}
+		{:else}
+			{@render header(
+				"Waiting for you",
+				"bg-blue-50 text-blue-600 dark:bg-blue-400/[0.14] dark:text-blue-400"
+			)}
+		{/if}
+		<div class="flex flex-col gap-1">
+			<div class="text-base font-semibold text-gray-900 dark:text-gray-100">{request.title}</div>
+			{#if subtitle && !(label && started)}
+				<div class="text-[13px] leading-normal text-gray-500 dark:text-gray-400">{subtitle}</div>
+			{/if}
+		</div>
+
+		{#if label && started}
+			<div class="flex flex-col gap-2">
+				{@render bar()}
+				{@render tally(ready)}
+			</div>
+		{:else if !label && counts.comments > 0}
+			<div class="text-[13px] text-gray-500 dark:text-gray-400">
+				{counts.comments} comment{counts.comments === 1 ? "" : "s"} on {commentedRecords} of {request.records}
+			</div>
+		{/if}
+
+		{#if session.submitError}
+			<p class="m-0 text-xs text-red-600 dark:text-red-400" role="alert">{session.submitError}</p>
+		{/if}
+
+		{#if confirming}
+			<div
+				class="flex items-center gap-2 rounded-[10px] bg-gray-50 py-2.5 pr-2.5 pl-3.5 dark:bg-gray-800/60"
+			>
+				<div class="flex-1 text-[13px] leading-snug text-gray-700 dark:text-gray-300">
+					Approve all {request.records} without opening any?
+				</div>
+				<button
+					type="button"
+					class="h-8 rounded-lg px-3 text-[13px] font-semibold text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
+					onclick={() => (confirming = false)}
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					class="{primary} h-8"
+					disabled={session.submitting}
+					onclick={approveAll}
+				>
+					Approve
+				</button>
+			</div>
+		{:else}
+			<div class="flex flex-wrap items-center gap-2">
+				{#if label}
+					{#if ready}
+						<button type="button" class={primary} onclick={() => open("finish")}>
+							Review and submit
+						</button>
+						<button type="button" class={plain} onclick={() => open()}>Open</button>
+					{:else if started}
+						<button type="button" class={primary} onclick={() => continueAt(firstTodo)}>
+							Continue at #{firstTodo + 1}<CarbonArrowRight class="text-sm" />
+						</button>
+						<span class="text-xs text-gray-500 dark:text-gray-400">Saved as you go</span>
+					{:else}
+						<button type="button" class={primary} onclick={() => open()}>
+							Start labelling<CarbonArrowRight class="text-sm" />
+						</button>
+					{/if}
+				{:else}
+					<button type="button" class={primary} onclick={() => open()}>Open review</button>
+					{#if session.editable}
+						<button type="button" class={plain} onclick={() => (confirming = true)}>
+							Approve all {request.records}
+						</button>
+					{/if}
+				{/if}
+			</div>
+		{/if}
+	</div>
+{/if}

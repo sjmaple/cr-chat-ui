@@ -14,6 +14,7 @@ import type {
 } from "$lib/types/MlReview";
 import { blockers, type ReviewBlocker } from "$lib/utils/review/answers";
 import { draftStatus } from "$lib/utils/review/view";
+import { recordState, type RecordState } from "$lib/utils/review/progress";
 import { mcpSelection } from "$lib/utils/sendElicitationAnswer";
 import { safeInvalidate } from "$lib/utils/safeInvalidate";
 import { UrlDependency } from "$lib/types/UrlDependency";
@@ -42,6 +43,8 @@ export interface ReviewPayload {
 }
 
 export type ReviewLoad = "loading" | "ready" | "missing" | "error";
+
+export type ReviewView = "focus" | "list" | "table" | "grid";
 
 export interface ReviewCounts {
 	answered: number;
@@ -100,13 +103,19 @@ export class ReviewSession {
 	serverBlockers = $state.raw<ReviewBlocker[]>([]);
 
 	/** pane state, kept here so a closed and reopened pane lands where the user was */
-	view = $state<"list" | "focus" | undefined>(undefined);
+	view = $state<ReviewView | undefined>(undefined);
+	/** undefined until the pane picks one, a fresh label review opens on its start step */
+	screen = $state<"start" | "work" | "finish" | undefined>(undefined);
+	navigatorOpen = $state(false);
 	focus = $state(0);
 	expanded = new SvelteSet<number>();
 	/** undefined until the user toggles it, the pane then opens it for a short review only */
 	instructionsOpen = $state<boolean | undefined>(undefined);
 
 	schema = $derived(this.payload?.schema);
+	states = $derived<RecordState[]>(
+		(this.payload?.records ?? []).map((_, index) => recordState(this.drafts[String(index)]))
+	);
 	records = $derived(this.payload?.records ?? []);
 	editable = $derived(
 		this.load === "ready" &&
@@ -246,6 +255,18 @@ export class ReviewSession {
 			index,
 			setTimeout(() => void this.#save(index), REVIEW_SAVE_DEBOUNCE_MS)
 		);
+	}
+
+	retrySaves(): Promise<void> {
+		return Promise.all([...this.saveErrors.keys()].map((index) => this.#save(index))).then(
+			() => undefined
+		);
+	}
+
+	openRecord(index: number): void {
+		this.focus = Math.max(0, Math.min(index, this.records.length - 1));
+		this.screen = "work";
+		this.navigatorOpen = false;
 	}
 
 	/** keepalive lets the requests outlive a closing tab */

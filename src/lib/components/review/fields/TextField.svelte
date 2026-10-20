@@ -2,7 +2,12 @@
 	import MarkdownRenderer from "$lib/components/chat/MarkdownRenderer.svelte";
 	import type { ReviewQuote } from "$lib/types/MlReview";
 	import { quoteAt } from "$lib/utils/review/view";
-	import { offsetsWithin, quoteAnchors, type AnchoredQuote } from "../quoteAnchors";
+	import {
+		offerSelectionComment,
+		offsetsWithin,
+		quoteAnchors,
+		type AnchoredQuote,
+	} from "../quoteAnchors";
 
 	import CarbonAddComment from "~icons/carbon/add-comment";
 
@@ -33,6 +38,12 @@
 	let pending = $state<{ quote: ReviewQuote; x: number; y: number; below: boolean } | undefined>(
 		undefined
 	);
+
+	$effect(() => {
+		if (!pending) return;
+		offerSelectionComment(comment);
+		return () => offerSelectionComment(undefined);
+	});
 
 	function selectedRange(): Range | undefined {
 		const selection = window.getSelection();
@@ -82,9 +93,9 @@
 		bind:this={element}
 		data-review-quotable
 		class={[
-			"min-w-0 text-sm text-gray-700 dark:text-gray-200",
+			"min-w-0 text-[15px] leading-[1.65] text-gray-700 dark:text-gray-300",
 			markdown
-				? "prose max-w-none text-sm dark:prose-invert prose-pre:bg-gray-800 dark:prose-pre:bg-gray-900"
+				? "prose max-w-none text-[15px] leading-[1.65] dark:prose-invert prose-headings:text-[15px] prose-headings:font-semibold prose-pre:bg-gray-800 dark:prose-pre:bg-gray-900"
 				: "break-words whitespace-pre-wrap",
 			clamp && (markdown ? "max-h-24 overflow-hidden" : "line-clamp-3"),
 		]}
@@ -99,18 +110,23 @@
 		{/if}
 	</div>
 	{#if pending}
-		<button
-			type="button"
-			class="absolute z-20 inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs whitespace-nowrap text-gray-700 shadow-md hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+		<span
+			class="absolute z-20 flex items-center gap-0.5 rounded-[10px] bg-gray-900 p-1 shadow-[0_6px_20px_rgba(0,0,0,0.18)] dark:bg-gray-100"
 			style="left: {pending.x}px; top: {pending.y}px; transform: translate(-50%, {pending.below
 				? '6px'
 				: 'calc(-100% - 6px)'});"
-			data-selection-popup
-			onmousedown={(e) => e.preventDefault()}
-			onclick={comment}
 		>
-			<CarbonAddComment class="text-xs" />
-			Comment on selection
-		</button>
+			<button
+				type="button"
+				class="flex h-[30px] items-center gap-1.5 rounded-[7px] px-2.5 text-[13px] font-medium whitespace-nowrap text-white hover:bg-white/10 dark:text-gray-900 dark:hover:bg-black/10"
+				data-selection-popup
+				onmousedown={(e) => e.preventDefault()}
+				onclick={comment}
+			>
+				<CarbonAddComment class="text-xs" />
+				Comment
+				<kbd class="font-mono text-[10px] opacity-60">C</kbd>
+			</button>
+		</span>
 	{/if}
 </div>

@@ -313,5 +313,12 @@ body {
 
 /* review comments anchored on a quote, set by quoteAnchors */
 ::highlight(review-quote) {
-	background-color: rgb(250 204 21 / 0.35);
+	text-decoration-line: underline;
+	text-decoration-color: #fde68a;
+	text-decoration-thickness: 3px;
+	text-underline-offset: 2px;
+}
+
+.dark ::highlight(review-quote) {
+	text-decoration-color: rgb(251 191 36 / 0.45);
 }
